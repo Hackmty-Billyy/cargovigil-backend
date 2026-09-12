@@ -9,6 +9,7 @@ type Role struct {
 
 type User struct {
 	ID              string
+	CompanyID       string
 	Email           string
 	PasswordHash    string
 	RoleID          int16

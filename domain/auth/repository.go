@@ -6,8 +6,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const pgUniqueViolation = "23505"
 
 type RoleRepository interface {
 	GetByName(ctx context.Context, name string) (*Role, error)
@@ -77,12 +80,12 @@ func NewPostgresUserRepository(db *pgxpool.Pool) *PostgresUserRepository {
 	return &PostgresUserRepository{db: db}
 }
 
-const userColumns = `id, email, password_hash, role_id, is_active, totp_enabled,
+const userColumns = `id, company_id, email, password_hash, role_id, is_active, totp_enabled,
 	totp_secret_enc, totp_confirmed_at, created_at, updated_at`
 
 func scanUser(row pgx.Row) (*User, error) {
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.RoleID, &u.IsActive, &u.TOTPEnabled,
+	err := row.Scan(&u.ID, &u.CompanyID, &u.Email, &u.PasswordHash, &u.RoleID, &u.IsActive, &u.TOTPEnabled,
 		&u.TOTPSecretEnc, &u.TOTPConfirmedAt, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -94,12 +97,20 @@ func scanUser(row pgx.Row) (*User, error) {
 }
 
 func (r *PostgresUserRepository) Create(ctx context.Context, u *User) error {
-	return r.db.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash, role_id, is_active)
-		 VALUES ($1, $2, $3, true)
+	err := r.db.QueryRow(ctx,
+		`INSERT INTO users (company_id, email, password_hash, role_id, is_active)
+		 VALUES ($1, $2, $3, $4, true)
 		 RETURNING id, created_at, updated_at`,
-		u.Email, u.PasswordHash, u.RoleID,
+		u.CompanyID, u.Email, u.PasswordHash, u.RoleID,
 	).Scan(&u.ID, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+			return ErrEmailAlreadyExists
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *PostgresUserRepository) GetByEmail(ctx context.Context, email string) (*User, error) {

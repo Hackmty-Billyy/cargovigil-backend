@@ -14,4 +14,5 @@ var (
 	ErrInvalidRefreshToken = errors.New("auth: invalid refresh token")
 	ErrRefreshTokenExpired = errors.New("auth: refresh token expired")
 	ErrSessionCompromised  = errors.New("auth: refresh token reuse detected, all sessions revoked")
+	ErrEmailAlreadyExists  = errors.New("auth: email already registered")
 )

@@ -18,7 +18,6 @@ func NewHandler(svc *Service) *Handler {
 // the two credential-guessing surfaces (password + TOTP check); authMiddleware
 // guards everything that requires an already-authenticated session.
 func (h *Handler) RegisterRoutes(router fiber.Router, authMiddleware, loginLimiter fiber.Handler) {
-	router.Post("/register", h.Register)
 	router.Post("/login", loginLimiter, h.Login)
 	router.Post("/login/verify-totp", loginLimiter, h.VerifyTOTP)
 	router.Post("/refresh", h.Refresh)
@@ -39,34 +38,6 @@ func sessionMetaFromCtx(c *fiber.Ctx) SessionMeta {
 func userIDFromCtx(c *fiber.Ctx) string {
 	id, _ := c.Locals("user_id").(string)
 	return id
-}
-
-type registerRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Role     string `json:"role"`
-}
-
-func (h *Handler) Register(c *fiber.Ctx) error {
-	var req registerRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
-	}
-	if req.Email == "" || req.Password == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "email and password are required"})
-	}
-	if req.Role == "" {
-		req.Role = "operations"
-	}
-	u, err := h.svc.Register(c.Context(), req.Email, req.Password, req.Role)
-	if err != nil {
-		return handleAuthError(c, err)
-	}
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-		"id":    u.ID,
-		"email": u.Email,
-		"role":  req.Role,
-	})
 }
 
 func (h *Handler) GetMe(c *fiber.Ctx) error {
@@ -185,7 +156,7 @@ func handleAuthError(c *fiber.Ctx, err error) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
 	case errors.Is(err, ErrSessionCompromised):
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "session compromised, please log in again"})
-	case errors.Is(err, ErrTOTPAlreadyEnabled), errors.Is(err, ErrTOTPNotEnrolled):
+	case errors.Is(err, ErrTOTPAlreadyEnabled), errors.Is(err, ErrTOTPNotEnrolled), errors.Is(err, ErrEmailAlreadyExists):
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": err.Error()})
 	default:
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal error"})

@@ -37,6 +37,7 @@ type LoginResult struct {
 
 type UserProfile struct {
 	ID          string    `json:"id"`
+	CompanyID   string    `json:"company_id"`
 	Email       string    `json:"email"`
 	RoleID      int16     `json:"role_id"`
 	RoleName    string    `json:"role_name"`
@@ -49,7 +50,7 @@ type SessionMeta struct {
 	IP        string
 }
 
-func (s *Service) Register(ctx context.Context, email, password, roleName string) (*User, error) {
+func (s *Service) Register(ctx context.Context, companyID, email, password, roleName string) (*User, error) {
 	role, err := s.roles.GetByName(ctx, roleName)
 	if err != nil {
 		return nil, err
@@ -58,7 +59,7 @@ func (s *Service) Register(ctx context.Context, email, password, roleName string
 	if err != nil {
 		return nil, err
 	}
-	u := &User{Email: email, PasswordHash: hash, RoleID: role.ID, IsActive: true}
+	u := &User{CompanyID: companyID, Email: email, PasswordHash: hash, RoleID: role.ID, IsActive: true}
 	if err := s.users.Create(ctx, u); err != nil {
 		return nil, err
 	}
@@ -77,6 +78,7 @@ func (s *Service) GetProfile(ctx context.Context, userID string) (*UserProfile, 
 	}
 	return &UserProfile{
 		ID:          u.ID,
+		CompanyID:   u.CompanyID,
 		Email:       u.Email,
 		RoleID:      u.RoleID,
 		RoleName:    roleName,
@@ -225,7 +227,7 @@ func (s *Service) regenerateRecoveryCodes(ctx context.Context, userID string) ([
 }
 
 func (s *Service) issueSession(ctx context.Context, u *User, meta SessionMeta) (*LoginResult, error) {
-	access, err := IssueAccessToken(s.cfg.JWTAccessSecret, u.ID, u.RoleID, s.cfg.AccessTokenTTL)
+	access, err := IssueAccessToken(s.cfg.JWTAccessSecret, u.ID, u.CompanyID, u.RoleID, s.cfg.AccessTokenTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +277,7 @@ func (s *Service) RefreshSession(ctx context.Context, rawToken string, meta Sess
 		return nil, ErrUserInactive
 	}
 
-	access, err := IssueAccessToken(s.cfg.JWTAccessSecret, u.ID, u.RoleID, s.cfg.AccessTokenTTL)
+	access, err := IssueAccessToken(s.cfg.JWTAccessSecret, u.ID, u.CompanyID, u.RoleID, s.cfg.AccessTokenTTL)
 	if err != nil {
 		return nil, err
 	}

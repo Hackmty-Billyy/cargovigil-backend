@@ -11,7 +11,8 @@ import (
 )
 
 type AccessClaims struct {
-	RoleID int16 `json:"role"`
+	RoleID    int16  `json:"role"`
+	CompanyID string `json:"company_id"`
 	jwt.RegisteredClaims
 }
 
@@ -27,9 +28,10 @@ func (c MFAPendingClaims) UserID() string { return c.Subject }
 // (password + TOTP when enabled). Uses its own signing secret, separate
 // from the MFA-pending token, so a bug in one verifier can't escalate the
 // other token type into a full session.
-func IssueAccessToken(secret []byte, userID string, roleID int16, ttl time.Duration) (string, error) {
+func IssueAccessToken(secret []byte, userID, companyID string, roleID int16, ttl time.Duration) (string, error) {
 	claims := AccessClaims{
-		RoleID: roleID,
+		RoleID:    roleID,
+		CompanyID: companyID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),

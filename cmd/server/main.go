@@ -8,6 +8,7 @@ import (
 	"github.com/Hackmty-Billyy/cargovigil-backend/config"
 	"github.com/Hackmty-Billyy/cargovigil-backend/database"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/auth"
+	"github.com/Hackmty-Billyy/cargovigil-backend/domain/company"
 	"github.com/Hackmty-Billyy/cargovigil-backend/jobs"
 	"github.com/Hackmty-Billyy/cargovigil-backend/server"
 )
@@ -44,10 +45,17 @@ func main() {
 		MFAPendingTTL:     cfg.MFAPendingTTL,
 	})
 
+	companyRepo := company.NewPostgresCompanyRepository(pool)
+	vehicleRepo := company.NewPostgresVehicleRepository(pool)
+	routeRepo := company.NewPostgresRouteRepository(pool)
+	clientRepo := company.NewPostgresClientRepository(pool)
+	contractRepo := company.NewPostgresContractRepository(pool)
+	companyService := company.NewService(companyRepo, vehicleRepo, routeRepo, clientRepo, contractRepo, authService)
+
 	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
 	defer cancelCleanup()
 	jobs.StartRefreshTokenCleanup(cleanupCtx, refreshRepo, time.Hour)
 
-	app := server.New(cfg, authService)
+	app := server.New(cfg, authService, companyService)
 	log.Fatal(app.Listen(":" + cfg.Port))
 }

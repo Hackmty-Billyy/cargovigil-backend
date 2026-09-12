@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_users_company_id;
+ALTER TABLE users ALTER COLUMN company_id DROP NOT NULL;
+ALTER TABLE users DROP COLUMN IF EXISTS company_id;

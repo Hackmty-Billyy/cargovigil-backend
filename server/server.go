@@ -10,10 +10,11 @@ import (
 
 	"github.com/Hackmty-Billyy/cargovigil-backend/config"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/auth"
+	"github.com/Hackmty-Billyy/cargovigil-backend/domain/company"
 	appmw "github.com/Hackmty-Billyy/cargovigil-backend/middleware"
 )
 
-func New(cfg *config.Config, authService *auth.Service) *fiber.App {
+func New(cfg *config.Config, authService *auth.Service, companyService *company.Service) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName: "Logistics Fintech API v1.0",
 	})
@@ -39,6 +40,18 @@ func New(cfg *config.Config, authService *auth.Service) *fiber.App {
 	authHandler := auth.NewHandler(authService)
 	authGroup := app.Group("/auth")
 	authHandler.RegisterRoutes(authGroup, authMiddleware, loginLimiter.Middleware())
+
+	companyHandler := company.NewHandler(companyService)
+
+	companyGroup := app.Group("/company", authMiddleware)
+	adminOnly := appmw.RequireRole(auth.RoleAdminID)
+	writeGuard := appmw.RequireRole(auth.RoleAdminID, auth.RoleOperationsID)
+	companyHandler.RegisterRoutes(companyGroup, writeGuard, adminOnly)
+
+	// Client companies no longer self-signup: only CargoVigil's own platform
+	// staff (role platform_admin) can onboard a new company.
+	platformGroup := app.Group("/platform", authMiddleware, appmw.RequireRole(auth.RolePlatformAdminID))
+	companyHandler.RegisterPlatformRoutes(platformGroup)
 
 	return app
 }

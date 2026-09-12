@@ -25,6 +25,7 @@ func RequireAuth(secret []byte) fiber.Handler {
 
 		c.Locals("user_id", claims.UserID())
 		c.Locals("role_id", claims.RoleID)
+		c.Locals("company_id", claims.CompanyID)
 		return c.Next()
 	}
 }
