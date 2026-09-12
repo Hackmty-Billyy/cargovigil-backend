@@ -1,0 +1,8 @@
+# Binarios
+/cmd/server/server
+*.exe
+*.out
+
+# Entornos y dependencias locales
+.env
+vendor/
