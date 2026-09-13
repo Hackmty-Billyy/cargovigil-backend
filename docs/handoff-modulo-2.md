@@ -1,5 +1,7 @@
 # Contexto para continuar CargoVigil Backend — Módulo 2
 
+> **Superado.** Este doc era el handoff para *empezar* el Módulo 2 (`domain/routecost`); ya se construyó, junto con el Módulo 3 (`domain/fuel`) y una capa de apoyo nueva, `domain/logistics` (radar en vivo), que no estaba prevista en el documento original de 5 módulos. La sección "Lo que sigue" al final ya no aplica tal cual. Para el estado y contrato de API actuales, ve `docs/modulo-2-frontend.md` (routecost) y `docs/modulo-radar-frontend.md` (logistics). El resto de este archivo (arquitectura de auth, bugs encontrados, forma de trabajar, usuarios de prueba) sigue vigente como contexto histórico.
+
 Estoy construyendo el backend de **CargoVigil**, una plataforma SaaS fintech+logtech multi-tenant para empresas de transporte (terrestre/marítimo/aéreo). Repo: `github.com/Hackmty-Billyy/cargovigil-backend`, Go + Fiber + Postgres (contenedor Docker `timescaledb`, imagen `timescale/timescaledb:latest-pg16`). Es un proyecto de hackathon (Hackmty) con otro compañero (estebanc) haciendo commits en paralelo directo a migraciones.
 
 Ya se implementó y **probó contra Postgres real** (no solo compila, se verificó con requests HTTP reales y `docker exec psql`) lo siguiente. Antes de tocar nada, lee el código existente — este resumen es orientación, no reemplaza revisar los archivos reales.

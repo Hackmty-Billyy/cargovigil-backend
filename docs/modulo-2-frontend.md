@@ -57,6 +57,7 @@ Todo cuelga de `/routecost` y requiere `Authorization: Bearer <access_token>`. E
 | GET | `/routecost/risk-profiles` | cualquiera | 200 · `RouteRiskProfile[]` |
 | POST | `/routecost/risk-profiles/recalculate?route_id=` | admin+ops | 200 · `RouteRiskProfile[]` |
 | GET | `/routecost/contingency` | cualquiera | 200 · `ContingencyFund[]` |
+| POST | `/routecost/contingency/allocate-all` | **admin+finance** | 200 · `{ allocated: number }` |
 | GET | `/routecost/trips/:id/contingency` | cualquiera | 200 · `ContingencyFund` · 404 si no hay |
 | POST | `/routecost/trips/:id/contingency/allocate` | **admin+finance** | 200 · `ContingencyFund` |
 | POST | `/routecost/trips/:id/contingency/release` | **admin+finance** | 200 · `ContingencyFund` |
@@ -64,6 +65,8 @@ Todo cuelga de `/routecost` y requiere `Authorization: Bearer <access_token>`. E
 | PUT | `/routecost/settings` | **admin+finance** | 200 · `CostSettings` |
 
 "cualquiera" = los tres roles de empresa (admin, operations, finance).
+
+`allocate-all` es la pasada de recuperación para viajes que entraron por el seeder o por importación: esos escriben `trips.contingency_budget` directo, sin pasar por este módulo, así que nunca tuvieron fila de fondo ni reserva en tesorería. Un viaje que falle no aborta el resto; la respuesta trae cuántos sí se lograron asignar.
 
 ### Payloads
 
@@ -144,6 +147,10 @@ export interface Friction {
   cost_impact: number;        // costo de bolsillo (moneda del viaje)
   opportunity_cost: number;   // ingreso que el activo no produjo
   notes: string | null; created_at: string;
+  // Resueltos por join en /routecost/frictions y /trips/:id/frictions — no
+  // vienen en el POST de alta, solo en las listas. Pueden faltar (omitempty).
+  trip_tracking_code?: string; trip_status?: TripStatus;
+  route_origin?: string; route_destination?: string;
 }
 
 export interface RouteRiskProfile {
@@ -152,6 +159,8 @@ export interface RouteRiskProfile {
   avg_delay_hours: number;
   suggested_contingency_percentage: number;   // 3 – 25
   incident_count: number; last_calculated_at: string;
+  // Resueltos por join — la fila no dice nada sin saber qué ruta es.
+  route_origin?: string; route_destination?: string; route_distance_km?: number | null;
 }
 
 export interface ContingencyFund {
@@ -162,6 +171,9 @@ export interface ContingencyFund {
   allocated_amount: number; consumed_amount: number; released_amount: number;
   status: FundStatus; reserve_expense_id: string | null;
   calculated_at: string; created_at: string; updated_at: string;
+  // Resueltos por join en /routecost/contingency (no en las rutas por-viaje).
+  trip_tracking_code?: string; trip_status?: TripStatus;
+  route_origin?: string; route_destination?: string;
 }
 
 export interface TripImpact {
@@ -217,6 +229,9 @@ listContingencyFunds(token: string) {
 }
 allocateContingency(token: string, tripId: string) {
   return this.request<ContingencyFund>(`/routecost/trips/${tripId}/contingency/allocate`, { method: 'POST' }, token);
+}
+allocateAllContingency(token: string) {
+  return this.request<{ allocated: number }>('/routecost/contingency/allocate-all', { method: 'POST' }, token);
 }
 ```
 
