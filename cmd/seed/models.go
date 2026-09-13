@@ -19,25 +19,25 @@ import (
 type Trip struct {
 	bun.BaseModel `bun:"table:trips,alias:t"`
 
-	ID                    string     `bun:"id,pk,type:uuid,default:gen_random_uuid(),nullzero"`
-	CompanyID             string     `bun:"company_id,notnull"`
-	VehicleID             string     `bun:"vehicle_id,notnull"`
-	RouteID               string     `bun:"route_id,notnull"`
-	ClientID              string     `bun:"client_id,notnull"`
-	ContractID            *string    `bun:"contract_id"`
-	TrackingCode          string     `bun:"tracking_code,notnull"`
-	CargoType             string     `bun:"cargo_type,notnull"`
-	CargoWeightTons       float64    `bun:"cargo_weight_tons,notnull"`
-	Status                string     `bun:"status,notnull"`
-	DepartureDate         time.Time  `bun:"departure_date,notnull"`
-	EstimatedArrivalDate  time.Time  `bun:"estimated_arrival_date,notnull"`
-	ActualArrivalDate     *time.Time `bun:"actual_arrival_date"`
-	AgreedFreightPrice    float64    `bun:"agreed_freight_price,notnull"`
-	Currency              string     `bun:"currency,notnull"`
-	FuelSurchargeAmount   float64    `bun:"fuel_surcharge_amount,notnull"`
-	ContingencyBudget     float64    `bun:"contingency_budget,notnull"`
-	CreatedAt             time.Time  `bun:"created_at,nullzero,default:now()"`
-	UpdatedAt             time.Time  `bun:"updated_at,nullzero,default:now()"`
+	ID                   string     `bun:"id,pk,type:uuid,default:gen_random_uuid(),nullzero"`
+	CompanyID            string     `bun:"company_id,notnull"`
+	VehicleID            string     `bun:"vehicle_id,notnull"`
+	RouteID              string     `bun:"route_id,notnull"`
+	ClientID             string     `bun:"client_id,notnull"`
+	ContractID           *string    `bun:"contract_id"`
+	TrackingCode         string     `bun:"tracking_code,notnull"`
+	CargoType            string     `bun:"cargo_type,notnull"`
+	CargoWeightTons      float64    `bun:"cargo_weight_tons,notnull"`
+	Status               string     `bun:"status,notnull"`
+	DepartureDate        time.Time  `bun:"departure_date,notnull"`
+	EstimatedArrivalDate time.Time  `bun:"estimated_arrival_date,notnull"`
+	ActualArrivalDate    *time.Time `bun:"actual_arrival_date"`
+	AgreedFreightPrice   float64    `bun:"agreed_freight_price,notnull"`
+	Currency             string     `bun:"currency,notnull"`
+	FuelSurchargeAmount  float64    `bun:"fuel_surcharge_amount,notnull"`
+	ContingencyBudget    float64    `bun:"contingency_budget,notnull"`
+	CreatedAt            time.Time  `bun:"created_at,nullzero,default:now()"`
+	UpdatedAt            time.Time  `bun:"updated_at,nullzero,default:now()"`
 }
 
 type TripFriction struct {
@@ -59,26 +59,26 @@ type TripFriction struct {
 type RouteRiskProfile struct {
 	bun.BaseModel `bun:"table:route_risk_profiles,alias:rrp"`
 
-	ID                               string    `bun:"id,pk,type:uuid,default:gen_random_uuid(),nullzero"`
-	CompanyID                        string    `bun:"company_id,notnull"`
-	RouteID                          string    `bun:"route_id,notnull"`
-	HistoricalRiskScore              float64   `bun:"historical_risk_score,notnull"`
-	AvgDelayHours                    float64   `bun:"avg_delay_hours,notnull"`
-	SuggestedContingencyPercentage   float64   `bun:"suggested_contingency_percentage,notnull"`
-	IncidentCount                    int       `bun:"incident_count,notnull"`
-	LastCalculatedAt                 time.Time `bun:"last_calculated_at,nullzero,default:now()"`
+	ID                             string    `bun:"id,pk,type:uuid,default:gen_random_uuid(),nullzero"`
+	CompanyID                      string    `bun:"company_id,notnull"`
+	RouteID                        string    `bun:"route_id,notnull"`
+	HistoricalRiskScore            float64   `bun:"historical_risk_score,notnull"`
+	AvgDelayHours                  float64   `bun:"avg_delay_hours,notnull"`
+	SuggestedContingencyPercentage float64   `bun:"suggested_contingency_percentage,notnull"`
+	IncidentCount                  int       `bun:"incident_count,notnull"`
+	LastCalculatedAt               time.Time `bun:"last_calculated_at,nullzero,default:now()"`
 }
 
 type ClientPaymentBehavior struct {
 	bun.BaseModel `bun:"table:client_payment_behavior,alias:cpb"`
 
-	ID                       string    `bun:"id,pk,type:uuid,default:gen_random_uuid(),nullzero"`
-	CompanyID                string    `bun:"company_id,notnull"`
-	ClientID                 string    `bun:"client_id,notnull"`
-	AveragePODApprovalDays   float64   `bun:"average_pod_approval_days,notnull"`
-	AveragePaymentDelayDays  float64   `bun:"average_payment_delay_days,notnull"`
-	DisputeRatePercentage    float64   `bun:"dispute_rate_percentage,notnull"`
-	LastCalculatedAt         time.Time `bun:"last_calculated_at,nullzero,default:now()"`
+	ID                      string    `bun:"id,pk,type:uuid,default:gen_random_uuid(),nullzero"`
+	CompanyID               string    `bun:"company_id,notnull"`
+	ClientID                string    `bun:"client_id,notnull"`
+	AveragePODApprovalDays  float64   `bun:"average_pod_approval_days,notnull"`
+	AveragePaymentDelayDays float64   `bun:"average_payment_delay_days,notnull"`
+	DisputeRatePercentage   float64   `bun:"dispute_rate_percentage,notnull"`
+	LastCalculatedAt        time.Time `bun:"last_calculated_at,nullzero,default:now()"`
 }
 
 type PODDocument struct {
