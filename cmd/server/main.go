@@ -9,6 +9,7 @@ import (
 	"github.com/Hackmty-Billyy/cargovigil-backend/database"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/auth"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/company"
+	"github.com/Hackmty-Billyy/cargovigil-backend/domain/routecost"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/treasury"
 	"github.com/Hackmty-Billyy/cargovigil-backend/jobs"
 	"github.com/Hackmty-Billyy/cargovigil-backend/server"
@@ -56,11 +57,16 @@ func main() {
 	treasuryRepo := treasury.NewPostgresRepository(pool)
 	treasuryService := treasury.NewService(treasuryRepo, treasuryRepo, treasuryRepo, treasuryRepo, treasuryRepo)
 
+	routeCostRepo := routecost.NewPostgresRepository(pool)
+	routeCostService := routecost.NewService(routeCostRepo, routeCostRepo, routeCostRepo, routeCostRepo, routeCostRepo,
+		routecost.FXRates{USDToMXN: cfg.FXUSDToMXN})
+
 	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
 	defer cancelCleanup()
 	jobs.StartRefreshTokenCleanup(cleanupCtx, refreshRepo, time.Hour)
 	jobs.StartTreasuryForecastJob(cleanupCtx, companyService, treasuryService, 24*time.Hour)
+	jobs.StartRouteRiskJob(cleanupCtx, companyService, routeCostService, 24*time.Hour)
 
-	app := server.New(cfg, authService, companyService, treasuryService)
+	app := server.New(cfg, authService, companyService, treasuryService, routeCostService)
 	log.Fatal(app.Listen(":" + cfg.Port))
 }

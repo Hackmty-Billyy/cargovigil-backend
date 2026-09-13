@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -22,6 +23,14 @@ type Config struct {
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
 	MFAPendingTTL   time.Duration
+
+	AllowedOrigins string
+
+	// FXUSDToMXN converts trip amounts (priced in USD in practice) into the
+	// MXN the treasury forecast reasons in. It is configuration and not a
+	// market feed: every contingency fund snapshots the rate it was created
+	// with, so changing this value never rewrites past reserves.
+	FXUSDToMXN float64
 }
 
 func Load() (*Config, error) {
@@ -63,9 +72,11 @@ func Load() (*Config, error) {
 		JWTMFASecret:      []byte(mfaSecret),
 		TOTPEncryptionKey: totpKey,
 		RecoveryPepper:    recoveryPepper,
+		AllowedOrigins:   getEnvOrDefault("ALLOWED_ORIGINS", ""),
 		AccessTokenTTL:    durationOrDefault("ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL:   durationOrDefault("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 		MFAPendingTTL:     durationOrDefault("MFA_PENDING_TTL", 5*time.Minute),
+		FXUSDToMXN:        floatOrDefault("FX_USD_MXN", 17.50),
 	}, nil
 }
 
@@ -80,6 +91,15 @@ func requireEnv(key string) (string, error) {
 func getEnvOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func floatOrDefault(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			return f
+		}
 	}
 	return fallback
 }

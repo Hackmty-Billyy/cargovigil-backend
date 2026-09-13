@@ -11,19 +11,27 @@ import (
 	"github.com/Hackmty-Billyy/cargovigil-backend/config"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/auth"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/company"
+	"github.com/Hackmty-Billyy/cargovigil-backend/domain/routecost"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/treasury"
 	appmw "github.com/Hackmty-Billyy/cargovigil-backend/middleware"
 )
 
-func New(cfg *config.Config, authService *auth.Service, companyService *company.Service, treasuryService *treasury.Service) *fiber.App {
+func New(cfg *config.Config, authService *auth.Service, companyService *company.Service,
+	treasuryService *treasury.Service, routeCostService *routecost.Service) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName: "Logistics Fintech API v1.0",
 	})
 
+	allowedOrigins := "https://cargovigil.tech,https://dev.cargovigil.tech,http://localhost:5173,http://localhost:3000"
+	if cfg != nil && cfg.AllowedOrigins != "" {
+		allowedOrigins = cfg.AllowedOrigins
+	}
+
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "https://cargovigil.tech, https://dev.cargovigil.tech, https://api.cargovigil.tech, https://apidev.cargovigil.tech, http://localhost:5173, http://localhost:3000",
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization, X-Requested-With",
-		AllowMethods: "GET, POST, HEAD, PUT, DELETE, PATCH, OPTIONS",
+		AllowOrigins:     allowedOrigins,
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With",
+		AllowMethods:     "GET, POST, HEAD, PUT, DELETE, PATCH, OPTIONS",
+		AllowCredentials: true,
 	}))
 	app.Use(recover.New())
 	app.Use(logger.New())
@@ -59,6 +67,17 @@ func New(cfg *config.Config, authService *auth.Service, companyService *company.
 	treasuryHandler := treasury.NewHandler(treasuryService)
 	treasuryGroup := app.Group("/treasury", authMiddleware, appmw.RequireRole(auth.RoleAdminID, auth.RoleFinanceID))
 	treasuryHandler.RegisterRoutes(treasuryGroup)
+
+	// Module 2 sits between the two worlds: any role of the company reads the
+	// operational picture (trips, downtime, route risk), operations captures
+	// it, and only admin+finance move the liquidity cushion.
+	// platform_admin is excluded from the whole group: it has no company of
+	// its own, so every tenant-scoped query here would be meaningless for it.
+	financeGuard := appmw.RequireRole(auth.RoleAdminID, auth.RoleFinanceID)
+	companyRoles := appmw.RequireRole(auth.RoleAdminID, auth.RoleOperationsID, auth.RoleFinanceID)
+	routeCostHandler := routecost.NewHandler(routeCostService)
+	routeCostGroup := app.Group("/routecost", authMiddleware, companyRoles)
+	routeCostHandler.RegisterRoutes(routeCostGroup, writeGuard, financeGuard)
 
 	return app
 }
