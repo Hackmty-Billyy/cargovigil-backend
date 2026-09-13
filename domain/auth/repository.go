@@ -2,12 +2,12 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/uptrace/bun"
 )
 
 const pgUniqueViolation = "23505"
@@ -40,19 +40,18 @@ type RefreshTokenRepository interface {
 	DeleteExpiredBefore(ctx context.Context, before time.Time) (int64, error)
 }
 
-// ---- Postgres implementations ----
+// ---- Bun implementations ----
 
-type PostgresRoleRepository struct{ db *pgxpool.Pool }
+type BunRoleRepository struct{ db *bun.DB }
 
-func NewPostgresRoleRepository(db *pgxpool.Pool) *PostgresRoleRepository {
-	return &PostgresRoleRepository{db: db}
+func NewBunRoleRepository(db *bun.DB) *BunRoleRepository {
+	return &BunRoleRepository{db: db}
 }
 
-func (r *PostgresRoleRepository) GetByName(ctx context.Context, name string) (*Role, error) {
-	role := &Role{}
-	err := r.db.QueryRow(ctx, `SELECT id, name FROM roles WHERE name = $1`, name).
-		Scan(&role.ID, &role.Name)
-	if errors.Is(err, pgx.ErrNoRows) {
+func (r *BunRoleRepository) GetByName(ctx context.Context, name string) (*Role, error) {
+	role := new(Role)
+	err := r.db.NewSelect().Model(role).Where("name = ?", name).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -61,11 +60,10 @@ func (r *PostgresRoleRepository) GetByName(ctx context.Context, name string) (*R
 	return role, nil
 }
 
-func (r *PostgresRoleRepository) GetByID(ctx context.Context, id int16) (*Role, error) {
-	role := &Role{}
-	err := r.db.QueryRow(ctx, `SELECT id, name FROM roles WHERE id = $1`, id).
-		Scan(&role.ID, &role.Name)
-	if errors.Is(err, pgx.ErrNoRows) {
+func (r *BunRoleRepository) GetByID(ctx context.Context, id int16) (*Role, error) {
+	role := new(Role)
+	err := r.db.NewSelect().Model(role).Where("id = ?", id).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -74,35 +72,18 @@ func (r *PostgresRoleRepository) GetByID(ctx context.Context, id int16) (*Role, 
 	return role, nil
 }
 
-type PostgresUserRepository struct{ db *pgxpool.Pool }
+type BunUserRepository struct{ db *bun.DB }
 
-func NewPostgresUserRepository(db *pgxpool.Pool) *PostgresUserRepository {
-	return &PostgresUserRepository{db: db}
+func NewBunUserRepository(db *bun.DB) *BunUserRepository {
+	return &BunUserRepository{db: db}
 }
 
-const userColumns = `id, company_id, email, password_hash, role_id, is_active, totp_enabled,
-	totp_secret_enc, totp_confirmed_at, created_at, updated_at`
-
-func scanUser(row pgx.Row) (*User, error) {
-	u := &User{}
-	err := row.Scan(&u.ID, &u.CompanyID, &u.Email, &u.PasswordHash, &u.RoleID, &u.IsActive, &u.TOTPEnabled,
-		&u.TOTPSecretEnc, &u.TOTPConfirmedAt, &u.CreatedAt, &u.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return u, nil
-}
-
-func (r *PostgresUserRepository) Create(ctx context.Context, u *User) error {
-	err := r.db.QueryRow(ctx,
-		`INSERT INTO users (company_id, email, password_hash, role_id, is_active)
-		 VALUES ($1, $2, $3, $4, true)
-		 RETURNING id, created_at, updated_at`,
-		u.CompanyID, u.Email, u.PasswordHash, u.RoleID,
-	).Scan(&u.ID, &u.CreatedAt, &u.UpdatedAt)
+func (r *BunUserRepository) Create(ctx context.Context, u *User) error {
+	u.IsActive = true
+	_, err := r.db.NewInsert().Model(u).
+		Column("company_id", "email", "password_hash", "role_id", "is_active").
+		Returning("id, created_at, updated_at").
+		Exec(ctx)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
@@ -113,103 +94,110 @@ func (r *PostgresUserRepository) Create(ctx context.Context, u *User) error {
 	return nil
 }
 
-func (r *PostgresUserRepository) GetByEmail(ctx context.Context, email string) (*User, error) {
-	row := r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE email = $1`, email)
-	return scanUser(row)
-}
-
-func (r *PostgresUserRepository) GetByID(ctx context.Context, id string) (*User, error) {
-	row := r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id)
-	return scanUser(row)
-}
-
-func (r *PostgresUserRepository) UpdateTOTPSecret(ctx context.Context, userID, secretEnc string) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE users SET totp_secret_enc = $1, updated_at = now() WHERE id = $2`,
-		secretEnc, userID)
-	return err
-}
-
-func (r *PostgresUserRepository) ConfirmTOTP(ctx context.Context, userID string, confirmedAt time.Time) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE users SET totp_enabled = true, totp_confirmed_at = $1, updated_at = now() WHERE id = $2`,
-		confirmedAt, userID)
-	return err
-}
-
-type PostgresRecoveryCodeRepository struct{ db *pgxpool.Pool }
-
-func NewPostgresRecoveryCodeRepository(db *pgxpool.Pool) *PostgresRecoveryCodeRepository {
-	return &PostgresRecoveryCodeRepository{db: db}
-}
-
-func (r *PostgresRecoveryCodeRepository) ReplaceAll(ctx context.Context, userID string, hashes []string) error {
-	tx, err := r.db.Begin(ctx)
-	if err != nil {
-		return err
+func (r *BunUserRepository) GetByEmail(ctx context.Context, email string) (*User, error) {
+	u := new(User)
+	err := r.db.NewSelect().Model(u).Where("email = ?", email).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
 	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `DELETE FROM user_recovery_codes WHERE user_id = $1`, userID); err != nil {
-		return err
-	}
-	for _, h := range hashes {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO user_recovery_codes (user_id, code_hash) VALUES ($1, $2)`, userID, h); err != nil {
-			return err
-		}
-	}
-	return tx.Commit(ctx)
-}
-
-func (r *PostgresRecoveryCodeRepository) FindUnusedByUser(ctx context.Context, userID string) ([]RecoveryCode, error) {
-	rows, err := r.db.Query(ctx,
-		`SELECT id, user_id, code_hash, used_at, created_at
-		 FROM user_recovery_codes WHERE user_id = $1 AND used_at IS NULL`, userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var codes []RecoveryCode
-	for rows.Next() {
-		var c RecoveryCode
-		if err := rows.Scan(&c.ID, &c.UserID, &c.CodeHash, &c.UsedAt, &c.CreatedAt); err != nil {
-			return nil, err
-		}
-		codes = append(codes, c)
-	}
-	return codes, rows.Err()
+	return u, nil
 }
 
-func (r *PostgresRecoveryCodeRepository) MarkUsed(ctx context.Context, id string) error {
-	_, err := r.db.Exec(ctx, `UPDATE user_recovery_codes SET used_at = now() WHERE id = $1`, id)
+func (r *BunUserRepository) GetByID(ctx context.Context, id string) (*User, error) {
+	u := new(User)
+	err := r.db.NewSelect().Model(u).Where("id = ?", id).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+func (r *BunUserRepository) UpdateTOTPSecret(ctx context.Context, userID, secretEnc string) error {
+	_, err := r.db.NewUpdate().Model((*User)(nil)).
+		Set("totp_secret_enc = ?", secretEnc).
+		Set("updated_at = now()").
+		Where("id = ?", userID).
+		Exec(ctx)
 	return err
 }
 
-type PostgresRefreshTokenRepository struct{ db *pgxpool.Pool }
-
-func NewPostgresRefreshTokenRepository(db *pgxpool.Pool) *PostgresRefreshTokenRepository {
-	return &PostgresRefreshTokenRepository{db: db}
+func (r *BunUserRepository) ConfirmTOTP(ctx context.Context, userID string, confirmedAt time.Time) error {
+	_, err := r.db.NewUpdate().Model((*User)(nil)).
+		Set("totp_enabled = true").
+		Set("totp_confirmed_at = ?", confirmedAt).
+		Set("updated_at = now()").
+		Where("id = ?", userID).
+		Exec(ctx)
+	return err
 }
 
-func (r *PostgresRefreshTokenRepository) Create(ctx context.Context, rt *RefreshToken) error {
-	return r.db.QueryRow(ctx,
-		`INSERT INTO refresh_tokens (user_id, token_hash, expires_at, user_agent, ip)
-		 VALUES ($1, $2, $3, $4, $5)
-		 RETURNING id, created_at`,
-		rt.UserID, rt.TokenHash, rt.ExpiresAt, rt.UserAgent, rt.IP,
-	).Scan(&rt.ID, &rt.CreatedAt)
+type BunRecoveryCodeRepository struct{ db *bun.DB }
+
+func NewBunRecoveryCodeRepository(db *bun.DB) *BunRecoveryCodeRepository {
+	return &BunRecoveryCodeRepository{db: db}
 }
 
-func (r *PostgresRefreshTokenRepository) GetByHash(ctx context.Context, hash string) (*RefreshToken, error) {
-	rt := &RefreshToken{}
-	err := r.db.QueryRow(ctx,
-		`SELECT id, user_id, token_hash, replaced_by_id, expires_at, revoked_at, user_agent, ip, created_at
-		 FROM refresh_tokens WHERE token_hash = $1`, hash,
-	).Scan(&rt.ID, &rt.UserID, &rt.TokenHash, &rt.ReplacedByID, &rt.ExpiresAt, &rt.RevokedAt,
-		&rt.UserAgent, &rt.IP, &rt.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+func (r *BunRecoveryCodeRepository) ReplaceAll(ctx context.Context, userID string, hashes []string) error {
+	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewDelete().Model((*RecoveryCode)(nil)).Where("user_id = ?", userID).Exec(ctx); err != nil {
+			return err
+		}
+		if len(hashes) == 0 {
+			return nil
+		}
+		codes := make([]RecoveryCode, len(hashes))
+		for i, h := range hashes {
+			codes[i] = RecoveryCode{UserID: userID, CodeHash: h}
+		}
+		_, err := tx.NewInsert().Model(&codes).Exec(ctx)
+		return err
+	})
+}
+
+func (r *BunRecoveryCodeRepository) FindUnusedByUser(ctx context.Context, userID string) ([]RecoveryCode, error) {
+	var codes []RecoveryCode
+	err := r.db.NewSelect().Model(&codes).
+		Where("user_id = ?", userID).
+		Where("used_at IS NULL").
+		Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return codes, nil
+}
+
+func (r *BunRecoveryCodeRepository) MarkUsed(ctx context.Context, id string) error {
+	_, err := r.db.NewUpdate().Model((*RecoveryCode)(nil)).
+		Set("used_at = now()").
+		Where("id = ?", id).
+		Exec(ctx)
+	return err
+}
+
+type BunRefreshTokenRepository struct{ db *bun.DB }
+
+func NewBunRefreshTokenRepository(db *bun.DB) *BunRefreshTokenRepository {
+	return &BunRefreshTokenRepository{db: db}
+}
+
+func (r *BunRefreshTokenRepository) Create(ctx context.Context, rt *RefreshToken) error {
+	_, err := r.db.NewInsert().Model(rt).
+		Column("user_id", "token_hash", "expires_at", "user_agent", "ip").
+		Returning("id, created_at").
+		Exec(ctx)
+	return err
+}
+
+func (r *BunRefreshTokenRepository) GetByHash(ctx context.Context, hash string) (*RefreshToken, error) {
+	rt := new(RefreshToken)
+	err := r.db.NewSelect().Model(rt).Where("token_hash = ?", hash).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -218,29 +206,39 @@ func (r *PostgresRefreshTokenRepository) GetByHash(ctx context.Context, hash str
 	return rt, nil
 }
 
-func (r *PostgresRefreshTokenRepository) MarkRotated(ctx context.Context, id, replacedByID string) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE refresh_tokens SET revoked_at = now(), replaced_by_id = $1 WHERE id = $2`,
-		replacedByID, id)
+func (r *BunRefreshTokenRepository) MarkRotated(ctx context.Context, id, replacedByID string) error {
+	_, err := r.db.NewUpdate().Model((*RefreshToken)(nil)).
+		Set("revoked_at = now()").
+		Set("replaced_by_id = ?", replacedByID).
+		Where("id = ?", id).
+		Exec(ctx)
 	return err
 }
 
-func (r *PostgresRefreshTokenRepository) Revoke(ctx context.Context, id string) error {
-	_, err := r.db.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = now() WHERE id = $1`, id)
+func (r *BunRefreshTokenRepository) Revoke(ctx context.Context, id string) error {
+	_, err := r.db.NewUpdate().Model((*RefreshToken)(nil)).
+		Set("revoked_at = now()").
+		Where("id = ?", id).
+		Exec(ctx)
 	return err
 }
 
-func (r *PostgresRefreshTokenRepository) RevokeAllForUser(ctx context.Context, userID string) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+func (r *BunRefreshTokenRepository) RevokeAllForUser(ctx context.Context, userID string) error {
+	_, err := r.db.NewUpdate().Model((*RefreshToken)(nil)).
+		Set("revoked_at = now()").
+		Where("user_id = ?", userID).
+		Where("revoked_at IS NULL").
+		Exec(ctx)
 	return err
 }
 
-func (r *PostgresRefreshTokenRepository) DeleteExpiredBefore(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := r.db.Exec(ctx,
-		`DELETE FROM refresh_tokens WHERE expires_at < $1 OR revoked_at IS NOT NULL`, before)
+func (r *BunRefreshTokenRepository) DeleteExpiredBefore(ctx context.Context, before time.Time) (int64, error) {
+	res, err := r.db.NewDelete().Model((*RefreshToken)(nil)).
+		Where("expires_at < ?", before).
+		WhereOr("revoked_at IS NOT NULL").
+		Exec(ctx)
 	if err != nil {
 		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	return res.RowsAffected()
 }

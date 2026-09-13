@@ -11,13 +11,14 @@ import (
 	"github.com/Hackmty-Billyy/cargovigil-backend/config"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/auth"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/company"
+	"github.com/Hackmty-Billyy/cargovigil-backend/domain/fuel"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/routecost"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/treasury"
 	appmw "github.com/Hackmty-Billyy/cargovigil-backend/middleware"
 )
 
 func New(cfg *config.Config, authService *auth.Service, companyService *company.Service,
-	treasuryService *treasury.Service, routeCostService *routecost.Service) *fiber.App {
+	treasuryService *treasury.Service, routeCostService *routecost.Service, fuelService *fuel.Service) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName: "Logistics Fintech API v1.0",
 	})
@@ -78,6 +79,18 @@ func New(cfg *config.Config, authService *auth.Service, companyService *company.
 	routeCostHandler := routecost.NewHandler(routeCostService)
 	routeCostGroup := app.Group("/routecost", authMiddleware, companyRoles)
 	routeCostHandler.RegisterRoutes(routeCostGroup, writeGuard, financeGuard)
+
+	// fuel_indexes has no company_id (shared global feed), so recording a
+	// reading is platform_admin-only, same reasoning as company onboarding.
+	fuelHandler := fuel.NewHandler(fuelService)
+	fuelHandler.RegisterPlatformRoutes(platformGroup)
+
+	// Reads (indexes, trip fuel logs) are open to any role of the company;
+	// logging a purchase is operational (admin+operations); surcharge rules
+	// and margin simulations are financial decisions (admin+finance) —
+	// differentiated per-route inside RegisterRoutes, like the company group.
+	fuelGroup := app.Group("/fuel", authMiddleware)
+	fuelHandler.RegisterRoutes(fuelGroup, writeGuard, financeGuard)
 
 	return app
 }

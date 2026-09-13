@@ -1,0 +1,73 @@
+Módulo 1 — Tesorería Predictiva y Liquidez a 30 Días
+
+Responsabilidad: el "cerebro" financiero — agrega ingresos/gastos reales y proyecta flujo de caja a 30-60 días.
+
+Entidades de dominio: BankAccount, Transaction (ingreso/gasto), CashFlowProjection, LiquidityAlert.
+
+Funciones core:
+
+Ingesta de movimientos bancarios (conexión Open Banking o carga manual/CSV al inicio).
+Motor de pronóstico (batch job diario que recalcula proyección a 30/60 días).
+Generador de alertas tempranas de déficit.
+
+Depende de: Módulos 2, 3 y 4 (recibe los ajustes de riesgo, combustible y cobros que modifican la proyección).
+Fuentes externas: APIs bancarias, facturación (ERP/contable si existe).
+
+Módulo 2 — Inteligencia de Costes Operativos y Fricciones en Ruta
+
+Responsabilidad: traducir ineficiencias físicas (tiempos muertos, riesgo de ruta) en impacto financiero.
+
+Entidades de dominio: Trip (viaje), DowntimeEvent (demurrage/detention), RouteRiskProfile, ContingencyFund.
+
+Funciones core:
+
+Registro y cálculo de tiempos de espera por viaje (puerto/aduana/CD).
+Cálculo de "pérdida de oportunidad" por unidad de tiempo inactivo.
+Asignación automática de colchón de liquidez por viaje según riesgo histórico de la ruta.
+
+Alimenta a: Módulo 1 (ajusta proyección de caja), Módulo 5 (afecta rentabilidad real).
+Fuentes externas: telemetría GPS de flota, datos de clima, histórico de incidentes por ruta.
+
+Módulo 3 — Gestión y Cobertura de Insumos / Combustible
+
+Responsabilidad: mitigar el impacto de la volatilidad del diésel/bunker/turbosina en el margen.
+
+Entidades de dominio: FuelIndex (precio por tipo/región), FuelSurchargeRule, RouteMarginImpact.
+
+Funciones core:
+
+Sincronización periódica con índices globales de combustible (job programado).
+Simulador de impacto en margen por ruta ante variación % de precio.
+Motor de recomendación de recargo por combustible (Fuel Surcharge).
+
+Alimenta a: Módulo 1 (impacto en proyección), Módulo 5 (impacto en margen real).
+Fuentes externas: APIs de índices de combustible (ej. EIA, Platts u otro proveedor regional).
+
+Módulo 4 — Inteligencia de Cobros y Salud Documental (POD Intelligence)
+
+Responsabilidad: vincular el ciclo de ingresos al estado legal/administrativo de la entrega.
+
+Entidades de dominio: ProofOfDelivery, DeliveryDispute, ClientPaymentBehavior.
+
+Funciones core:
+
+Tracking de estatus del POD (pendiente/firmado/disputado).
+Ajuste dinámico de la fecha estimada de cobro según histórico de retrasos del cliente.
+Alertas de documentación retenida.
+
+Alimenta a: Módulo 1 (ajusta fecha de entrada de efectivo proyectado).
+Depende de: Módulo 0 (Client, Contract).
+
+Módulo 5 — Rentabilidad Real por Ruta y Cliente
+
+Responsabilidad: calcular la salud financiera real de cada ruta/cliente, más allá de la tarifa aparente.
+
+Entidades de dominio: RouteProfitability, ClientClassification ("quemador de capital" vs. rentable), RenegotiationSuggestion.
+
+Funciones core:
+
+Cálculo de margen de contribución real por km/milla náutica (cruza flete vs. combustible + peajes + viáticos + desgaste).
+Clasificación automática de rutas/clientes.
+Motor de sugerencias (renegociar/ajustar/rechazar contrato).
+
+Depende de: Módulos 1, 2, 3 y 4 (consume datos de todos — es el módulo "consumidor final" de la inteligencia de los demás).

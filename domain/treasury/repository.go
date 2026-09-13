@@ -2,16 +2,16 @@ package treasury
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/uptrace/bun"
 )
 
 // Method names are suffixed per entity (CreateInvoice, CreateExpense, ...)
 // rather than the bare Create/GetByID/Update used elsewhere in this codebase,
-// because a single PostgresRepository struct implements all five interfaces
+// because a single BunRepository struct implements all five interfaces
 // below on purpose (payments span invoices/expenses AND bank_accounts in one
 // transaction) and Go does not allow two methods named Create on one type.
 
@@ -56,35 +56,32 @@ type CashFlowProjectionRepository interface {
 	ListProjectionsByCompany(ctx context.Context, companyID string, days int) ([]CashFlowProjection, error)
 }
 
-// PostgresRepository implements all five interfaces above. They share one
-// struct (not one-per-entity like domain/auth) because recording a payment
-// has to update an invoice/expense AND the bank account balance in the same
-// transaction, and it's simpler to do that with direct pool access than to
-// coordinate two separate repositories.
-type PostgresRepository struct{ db *pgxpool.Pool }
+// BunRepository implements all five interfaces above. They share one
+// struct (not one-per-entity like domain/company) because recording a
+// payment has to update an invoice/expense AND the bank account balance in
+// the same transaction, and Bun's db.RunInTx makes that straightforward
+// from one struct with access to every table involved.
+type BunRepository struct{ db *bun.DB }
 
-func NewPostgresRepository(db *pgxpool.Pool) *PostgresRepository {
-	return &PostgresRepository{db: db}
+func NewBunRepository(db *bun.DB) *BunRepository {
+	return &BunRepository{db: db}
 }
 
 // ---- Bank accounts ----
 
-func (r *PostgresRepository) CreateBankAccount(ctx context.Context, a *BankAccount) error {
-	return r.db.QueryRow(ctx,
-		`INSERT INTO bank_accounts (company_id, bank_name, account_number_mask, currency, current_balance, minimum_required_balance, is_active)
-		 VALUES ($1, $2, $3, $4, $5, $6, true)
-		 RETURNING id, is_active, created_at, updated_at`,
-		a.CompanyID, a.BankName, a.AccountNumberMask, a.Currency, a.CurrentBalance, a.MinimumRequiredBalance,
-	).Scan(&a.ID, &a.IsActive, &a.CreatedAt, &a.UpdatedAt)
+func (r *BunRepository) CreateBankAccount(ctx context.Context, a *BankAccount) error {
+	a.IsActive = true
+	_, err := r.db.NewInsert().Model(a).
+		Column("company_id", "bank_name", "account_number_mask", "currency", "current_balance", "minimum_required_balance", "is_active").
+		Returning("id, is_active, created_at, updated_at").
+		Exec(ctx)
+	return err
 }
 
-func (r *PostgresRepository) GetBankAccountByID(ctx context.Context, companyID, id string) (*BankAccount, error) {
-	a := &BankAccount{}
-	err := r.db.QueryRow(ctx,
-		`SELECT id, company_id, bank_name, account_number_mask, currency, current_balance, minimum_required_balance, is_active, created_at, updated_at
-		 FROM bank_accounts WHERE company_id = $1 AND id = $2`, companyID, id,
-	).Scan(&a.ID, &a.CompanyID, &a.BankName, &a.AccountNumberMask, &a.Currency, &a.CurrentBalance, &a.MinimumRequiredBalance, &a.IsActive, &a.CreatedAt, &a.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+func (r *BunRepository) GetBankAccountByID(ctx context.Context, companyID, id string) (*BankAccount, error) {
+	a := new(BankAccount)
+	err := r.db.NewSelect().Model(a).Where("company_id = ?", companyID).Where("id = ?", id).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -93,49 +90,53 @@ func (r *PostgresRepository) GetBankAccountByID(ctx context.Context, companyID, 
 	return a, nil
 }
 
-func (r *PostgresRepository) ListBankAccountsByCompany(ctx context.Context, companyID string) ([]BankAccount, error) {
-	rows, err := r.db.Query(ctx,
-		`SELECT id, company_id, bank_name, account_number_mask, currency, current_balance, minimum_required_balance, is_active, created_at, updated_at
-		 FROM bank_accounts WHERE company_id = $1 ORDER BY created_at DESC`, companyID)
+func (r *BunRepository) ListBankAccountsByCompany(ctx context.Context, companyID string) ([]BankAccount, error) {
+	out := []BankAccount{}
+	err := r.db.NewSelect().Model(&out).Where("company_id = ?", companyID).OrderExpr("created_at DESC").Scan(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	out := []BankAccount{}
-	for rows.Next() {
-		var a BankAccount
-		if err := rows.Scan(&a.ID, &a.CompanyID, &a.BankName, &a.AccountNumberMask, &a.Currency, &a.CurrentBalance, &a.MinimumRequiredBalance, &a.IsActive, &a.CreatedAt, &a.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func (r *PostgresRepository) UpdateBankAccount(ctx context.Context, a *BankAccount) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE bank_accounts SET bank_name=$1, account_number_mask=$2, currency=$3, minimum_required_balance=$4, is_active=$5, updated_at=now()
-		 WHERE company_id=$6 AND id=$7`,
-		a.BankName, a.AccountNumberMask, a.Currency, a.MinimumRequiredBalance, a.IsActive, a.CompanyID, a.ID)
+// UpdateBankAccount deliberately never touches current_balance — that field
+// only ever moves through RecordPayment/MarkPaid, atomically with the
+// invoice/expense it's tied to.
+func (r *BunRepository) UpdateBankAccount(ctx context.Context, a *BankAccount) error {
+	_, err := r.db.NewUpdate().Model(a).
+		Set("bank_name = ?", a.BankName).
+		Set("account_number_mask = ?", a.AccountNumberMask).
+		Set("currency = ?", a.Currency).
+		Set("minimum_required_balance = ?", a.MinimumRequiredBalance).
+		Set("is_active = ?", a.IsActive).
+		Set("updated_at = now()").
+		Where("company_id = ?", a.CompanyID).
+		Where("id = ?", a.ID).
+		Exec(ctx)
 	return err
 }
 
-func (r *PostgresRepository) DeleteBankAccount(ctx context.Context, companyID, id string) error {
-	_, err := r.db.Exec(ctx, `DELETE FROM bank_accounts WHERE company_id = $1 AND id = $2`, companyID, id)
+func (r *BunRepository) DeleteBankAccount(ctx context.Context, companyID, id string) error {
+	_, err := r.db.NewDelete().Model((*BankAccount)(nil)).Where("company_id = ?", companyID).Where("id = ?", id).Exec(ctx)
 	return err
 }
 
 // ---- Invoices ----
 
-const invoiceColumns = `id, company_id, trip_id, client_id, bank_account_id, invoice_number,
-	issue_date, due_date, adjusted_due_date, total_amount, paid_amount, status, created_at, updated_at`
+func (r *BunRepository) CreateInvoice(ctx context.Context, inv *Invoice) error {
+	inv.PaidAmount = 0
+	inv.Status = "issued"
+	_, err := r.db.NewInsert().Model(inv).
+		Column("company_id", "trip_id", "client_id", "invoice_number", "issue_date", "due_date", "adjusted_due_date", "total_amount", "paid_amount", "status").
+		Returning("id, paid_amount, status, created_at, updated_at").
+		Exec(ctx)
+	return err
+}
 
-func scanInvoice(row pgx.Row) (*Invoice, error) {
-	inv := &Invoice{}
-	err := row.Scan(&inv.ID, &inv.CompanyID, &inv.TripID, &inv.ClientID, &inv.BankAccountID, &inv.InvoiceNumber,
-		&inv.IssueDate, &inv.DueDate, &inv.AdjustedDueDate, &inv.TotalAmount, &inv.PaidAmount, &inv.Status, &inv.CreatedAt, &inv.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+func (r *BunRepository) GetInvoiceByID(ctx context.Context, companyID, id string) (*Invoice, error) {
+	inv := new(Invoice)
+	err := r.db.NewSelect().Model(inv).Where("company_id = ?", companyID).Where("id = ?", id).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -144,127 +145,124 @@ func scanInvoice(row pgx.Row) (*Invoice, error) {
 	return inv, nil
 }
 
-func (r *PostgresRepository) CreateInvoice(ctx context.Context, inv *Invoice) error {
-	return r.db.QueryRow(ctx,
-		`INSERT INTO invoices (company_id, trip_id, client_id, invoice_number, issue_date, due_date, adjusted_due_date, total_amount, paid_amount, status)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, 'issued')
-		 RETURNING id, paid_amount, status, created_at, updated_at`,
-		inv.CompanyID, inv.TripID, inv.ClientID, inv.InvoiceNumber, inv.IssueDate, inv.DueDate, inv.AdjustedDueDate, inv.TotalAmount,
-	).Scan(&inv.ID, &inv.PaidAmount, &inv.Status, &inv.CreatedAt, &inv.UpdatedAt)
-}
-
-func (r *PostgresRepository) GetInvoiceByID(ctx context.Context, companyID, id string) (*Invoice, error) {
-	row := r.db.QueryRow(ctx, `SELECT `+invoiceColumns+` FROM invoices WHERE company_id = $1 AND id = $2`, companyID, id)
-	return scanInvoice(row)
-}
-
-func (r *PostgresRepository) ListInvoicesByCompany(ctx context.Context, companyID string) ([]Invoice, error) {
-	rows, err := r.db.Query(ctx, `SELECT `+invoiceColumns+` FROM invoices WHERE company_id = $1 ORDER BY due_date ASC`, companyID)
+func (r *BunRepository) ListInvoicesByCompany(ctx context.Context, companyID string) ([]Invoice, error) {
+	out := []Invoice{}
+	err := r.db.NewSelect().Model(&out).Where("company_id = ?", companyID).OrderExpr("due_date ASC").Scan(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	out := []Invoice{}
-	for rows.Next() {
-		inv, err := scanInvoice(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *inv)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func (r *PostgresRepository) ListUnpaidInvoicesByCompany(ctx context.Context, companyID string) ([]Invoice, error) {
-	rows, err := r.db.Query(ctx,
-		`SELECT `+invoiceColumns+` FROM invoices WHERE company_id = $1 AND status NOT IN ('paid', 'cancelled') ORDER BY adjusted_due_date ASC`,
-		companyID)
+func (r *BunRepository) ListUnpaidInvoicesByCompany(ctx context.Context, companyID string) ([]Invoice, error) {
+	out := []Invoice{}
+	err := r.db.NewSelect().Model(&out).
+		Where("company_id = ?", companyID).
+		Where("status NOT IN (?)", bun.In([]string{"paid", "cancelled"})).
+		OrderExpr("adjusted_due_date ASC").
+		Scan(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	out := []Invoice{}
-	for rows.Next() {
-		inv, err := scanInvoice(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *inv)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func (r *PostgresRepository) UpdateInvoice(ctx context.Context, inv *Invoice) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE invoices SET trip_id=$1, client_id=$2, invoice_number=$3, issue_date=$4, due_date=$5, adjusted_due_date=$6, total_amount=$7, updated_at=now()
-		 WHERE company_id=$8 AND id=$9`,
-		inv.TripID, inv.ClientID, inv.InvoiceNumber, inv.IssueDate, inv.DueDate, inv.AdjustedDueDate, inv.TotalAmount, inv.CompanyID, inv.ID)
+// UpdateInvoice never touches paid_amount/status/bank_account_id — those
+// are only ever changed by RecordPayment.
+func (r *BunRepository) UpdateInvoice(ctx context.Context, inv *Invoice) error {
+	_, err := r.db.NewUpdate().Model(inv).
+		Set("trip_id = ?", inv.TripID).
+		Set("client_id = ?", inv.ClientID).
+		Set("invoice_number = ?", inv.InvoiceNumber).
+		Set("issue_date = ?", inv.IssueDate).
+		Set("due_date = ?", inv.DueDate).
+		Set("adjusted_due_date = ?", inv.AdjustedDueDate).
+		Set("total_amount = ?", inv.TotalAmount).
+		Set("updated_at = now()").
+		Where("company_id = ?", inv.CompanyID).
+		Where("id = ?", inv.ID).
+		Exec(ctx)
 	return err
 }
 
-func (r *PostgresRepository) DeleteInvoice(ctx context.Context, companyID, id string) error {
-	_, err := r.db.Exec(ctx, `DELETE FROM invoices WHERE company_id = $1 AND id = $2`, companyID, id)
+func (r *BunRepository) DeleteInvoice(ctx context.Context, companyID, id string) error {
+	_, err := r.db.NewDelete().Model((*Invoice)(nil)).Where("company_id = ?", companyID).Where("id = ?", id).Exec(ctx)
 	return err
 }
 
-func (r *PostgresRepository) RecordPayment(ctx context.Context, companyID, id string, amount float64, bankAccountID string) (*Invoice, error) {
-	tx, err := r.db.Begin(ctx)
+func (r *BunRepository) RecordPayment(ctx context.Context, companyID, id string, amount float64, bankAccountID string) (*Invoice, error) {
+	var result *Invoice
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		inv := new(Invoice)
+		if err := tx.NewSelect().Model(inv).
+			Where("company_id = ?", companyID).Where("id = ?", id).
+			For("UPDATE").
+			Scan(ctx); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		newPaid := inv.PaidAmount + amount
+		if newPaid > inv.TotalAmount+0.005 {
+			return ErrOverpayment
+		}
+		status := "partially_paid"
+		if newPaid >= inv.TotalAmount-0.005 {
+			newPaid = inv.TotalAmount
+			status = "paid"
+		}
+
+		if _, err := tx.NewUpdate().Model((*Invoice)(nil)).
+			Set("paid_amount = ?", newPaid).
+			Set("status = ?", status).
+			Set("bank_account_id = ?", bankAccountID).
+			Set("updated_at = now()").
+			Where("id = ?", id).
+			Exec(ctx); err != nil {
+			return err
+		}
+
+		res, err := tx.NewUpdate().Model((*BankAccount)(nil)).
+			Set("current_balance = current_balance + ?", amount).
+			Set("updated_at = now()").
+			Where("company_id = ?", companyID).Where("id = ?", bankAccountID).
+			Exec(ctx)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+
+		inv.PaidAmount = newPaid
+		inv.Status = status
+		inv.BankAccountID = &bankAccountID
+		result = inv
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
-
-	inv, err := scanInvoice(tx.QueryRow(ctx, `SELECT `+invoiceColumns+` FROM invoices WHERE company_id = $1 AND id = $2 FOR UPDATE`, companyID, id))
-	if err != nil {
-		return nil, err
-	}
-
-	newPaid := inv.PaidAmount + amount
-	if newPaid > inv.TotalAmount+0.005 {
-		return nil, ErrOverpayment
-	}
-	status := "partially_paid"
-	if newPaid >= inv.TotalAmount-0.005 {
-		newPaid = inv.TotalAmount
-		status = "paid"
-	}
-
-	if _, err := tx.Exec(ctx,
-		`UPDATE invoices SET paid_amount=$1, status=$2, bank_account_id=$3, updated_at=now() WHERE id=$4`,
-		newPaid, status, bankAccountID, id); err != nil {
-		return nil, err
-	}
-
-	tag, err := tx.Exec(ctx,
-		`UPDATE bank_accounts SET current_balance = current_balance + $1, updated_at=now() WHERE company_id=$2 AND id=$3`,
-		amount, companyID, bankAccountID)
-	if err != nil {
-		return nil, err
-	}
-	if tag.RowsAffected() == 0 {
-		return nil, ErrNotFound
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-
-	inv.PaidAmount = newPaid
-	inv.Status = status
-	inv.BankAccountID = &bankAccountID
-	return inv, nil
+	return result, nil
 }
 
 // ---- Expenses ----
 
-const expenseColumns = `id, company_id, trip_id, bank_account_id, category, description, amount, due_date, paid_date, status, created_at, updated_at`
+func (r *BunRepository) CreateExpense(ctx context.Context, e *Expense) error {
+	e.Status = "pending"
+	_, err := r.db.NewInsert().Model(e).
+		Column("company_id", "trip_id", "category", "description", "amount", "due_date", "status").
+		Returning("id, status, created_at, updated_at").
+		Exec(ctx)
+	return err
+}
 
-func scanExpense(row pgx.Row) (*Expense, error) {
-	e := &Expense{}
-	err := row.Scan(&e.ID, &e.CompanyID, &e.TripID, &e.BankAccountID, &e.Category, &e.Description, &e.Amount, &e.DueDate, &e.PaidDate, &e.Status, &e.CreatedAt, &e.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+func (r *BunRepository) GetExpenseByID(ctx context.Context, companyID, id string) (*Expense, error) {
+	e := new(Expense)
+	err := r.db.NewSelect().Model(e).Where("company_id = ?", companyID).Where("id = ?", id).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -273,147 +271,133 @@ func scanExpense(row pgx.Row) (*Expense, error) {
 	return e, nil
 }
 
-func (r *PostgresRepository) CreateExpense(ctx context.Context, e *Expense) error {
-	return r.db.QueryRow(ctx,
-		`INSERT INTO expenses (company_id, trip_id, category, description, amount, due_date, status)
-		 VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-		 RETURNING id, status, created_at, updated_at`,
-		e.CompanyID, e.TripID, e.Category, e.Description, e.Amount, e.DueDate,
-	).Scan(&e.ID, &e.Status, &e.CreatedAt, &e.UpdatedAt)
-}
-
-func (r *PostgresRepository) GetExpenseByID(ctx context.Context, companyID, id string) (*Expense, error) {
-	row := r.db.QueryRow(ctx, `SELECT `+expenseColumns+` FROM expenses WHERE company_id = $1 AND id = $2`, companyID, id)
-	return scanExpense(row)
-}
-
-func (r *PostgresRepository) ListExpensesByCompany(ctx context.Context, companyID string) ([]Expense, error) {
-	rows, err := r.db.Query(ctx, `SELECT `+expenseColumns+` FROM expenses WHERE company_id = $1 ORDER BY due_date ASC`, companyID)
+func (r *BunRepository) ListExpensesByCompany(ctx context.Context, companyID string) ([]Expense, error) {
+	out := []Expense{}
+	err := r.db.NewSelect().Model(&out).Where("company_id = ?", companyID).OrderExpr("due_date ASC").Scan(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	out := []Expense{}
-	for rows.Next() {
-		e, err := scanExpense(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *e)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func (r *PostgresRepository) ListPendingExpensesByCompany(ctx context.Context, companyID string) ([]Expense, error) {
-	rows, err := r.db.Query(ctx,
-		`SELECT `+expenseColumns+` FROM expenses WHERE company_id = $1 AND status = 'pending' ORDER BY due_date ASC`, companyID)
+func (r *BunRepository) ListPendingExpensesByCompany(ctx context.Context, companyID string) ([]Expense, error) {
+	out := []Expense{}
+	err := r.db.NewSelect().Model(&out).
+		Where("company_id = ?", companyID).
+		Where("status = ?", "pending").
+		OrderExpr("due_date ASC").
+		Scan(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	out := []Expense{}
-	for rows.Next() {
-		e, err := scanExpense(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *e)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func (r *PostgresRepository) UpdateExpense(ctx context.Context, e *Expense) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE expenses SET trip_id=$1, category=$2, description=$3, amount=$4, due_date=$5, updated_at=now()
-		 WHERE company_id=$6 AND id=$7`,
-		e.TripID, e.Category, e.Description, e.Amount, e.DueDate, e.CompanyID, e.ID)
+// UpdateExpense never touches paid_date/status/bank_account_id — those are
+// only ever changed by MarkPaid.
+func (r *BunRepository) UpdateExpense(ctx context.Context, e *Expense) error {
+	_, err := r.db.NewUpdate().Model(e).
+		Set("trip_id = ?", e.TripID).
+		Set("category = ?", e.Category).
+		Set("description = ?", e.Description).
+		Set("amount = ?", e.Amount).
+		Set("due_date = ?", e.DueDate).
+		Set("updated_at = now()").
+		Where("company_id = ?", e.CompanyID).
+		Where("id = ?", e.ID).
+		Exec(ctx)
 	return err
 }
 
-func (r *PostgresRepository) DeleteExpense(ctx context.Context, companyID, id string) error {
-	_, err := r.db.Exec(ctx, `DELETE FROM expenses WHERE company_id = $1 AND id = $2`, companyID, id)
+func (r *BunRepository) DeleteExpense(ctx context.Context, companyID, id string) error {
+	_, err := r.db.NewDelete().Model((*Expense)(nil)).Where("company_id = ?", companyID).Where("id = ?", id).Exec(ctx)
 	return err
 }
 
-func (r *PostgresRepository) MarkPaid(ctx context.Context, companyID, id, bankAccountID string) (*Expense, error) {
-	tx, err := r.db.Begin(ctx)
+func (r *BunRepository) MarkPaid(ctx context.Context, companyID, id, bankAccountID string) (*Expense, error) {
+	var result *Expense
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		e := new(Expense)
+		if err := tx.NewSelect().Model(e).
+			Where("company_id = ?", companyID).Where("id = ?", id).
+			For("UPDATE").
+			Scan(ctx); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if e.Status == "paid" {
+			return ErrInvalidStatus
+		}
+
+		if _, err := tx.NewUpdate().Model((*Expense)(nil)).
+			Set("status = ?", "paid").
+			Set("paid_date = now()").
+			Set("bank_account_id = ?", bankAccountID).
+			Set("updated_at = now()").
+			Where("id = ?", id).
+			Exec(ctx); err != nil {
+			return err
+		}
+
+		res, err := tx.NewUpdate().Model((*BankAccount)(nil)).
+			Set("current_balance = current_balance - ?", e.Amount).
+			Set("updated_at = now()").
+			Where("company_id = ?", companyID).Where("id = ?", bankAccountID).
+			Exec(ctx)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+
+		e.Status = "paid"
+		e.BankAccountID = &bankAccountID
+		result = e
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
-
-	e, err := scanExpense(tx.QueryRow(ctx, `SELECT `+expenseColumns+` FROM expenses WHERE company_id = $1 AND id = $2 FOR UPDATE`, companyID, id))
-	if err != nil {
-		return nil, err
-	}
-	if e.Status == "paid" {
-		return nil, ErrInvalidStatus
-	}
-
-	if _, err := tx.Exec(ctx,
-		`UPDATE expenses SET status='paid', paid_date=now(), bank_account_id=$1, updated_at=now() WHERE id=$2`,
-		bankAccountID, id); err != nil {
-		return nil, err
-	}
-
-	tag, err := tx.Exec(ctx,
-		`UPDATE bank_accounts SET current_balance = current_balance - $1, updated_at=now() WHERE company_id=$2 AND id=$3`,
-		e.Amount, companyID, bankAccountID)
-	if err != nil {
-		return nil, err
-	}
-	if tag.RowsAffected() == 0 {
-		return nil, ErrNotFound
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-
-	e.Status = "paid"
-	e.BankAccountID = &bankAccountID
-	return e, nil
+	return result, nil
 }
 
 // ---- Cash alerts ----
 
-const cashAlertColumns = `id, company_id, projected_date, severity, projected_deficit, description, is_resolved, created_at, updated_at`
-
-func scanCashAlert(row pgx.Row) (*CashAlert, error) {
-	a := &CashAlert{}
-	err := row.Scan(&a.ID, &a.CompanyID, &a.ProjectedDate, &a.Severity, &a.ProjectedDeficit, &a.Description, &a.IsResolved, &a.CreatedAt, &a.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return a, nil
-}
-
-func (r *PostgresRepository) CreateAlert(ctx context.Context, a *CashAlert) error {
-	return r.db.QueryRow(ctx,
-		`INSERT INTO cash_alerts (company_id, projected_date, severity, projected_deficit, description, is_resolved)
-		 VALUES ($1, $2, $3, $4, $5, false)
-		 RETURNING id, is_resolved, created_at, updated_at`,
-		a.CompanyID, a.ProjectedDate, a.Severity, a.ProjectedDeficit, a.Description,
-	).Scan(&a.ID, &a.IsResolved, &a.CreatedAt, &a.UpdatedAt)
-}
-
-func (r *PostgresRepository) UpdateAlert(ctx context.Context, a *CashAlert) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE cash_alerts SET severity=$1, projected_deficit=$2, description=$3, updated_at=now() WHERE id=$4`,
-		a.Severity, a.ProjectedDeficit, a.Description, a.ID)
+func (r *BunRepository) CreateAlert(ctx context.Context, a *CashAlert) error {
+	a.IsResolved = false
+	_, err := r.db.NewInsert().Model(a).
+		Column("company_id", "projected_date", "severity", "projected_deficit", "description", "is_resolved").
+		Returning("id, is_resolved, created_at, updated_at").
+		Exec(ctx)
 	return err
 }
 
-func (r *PostgresRepository) GetOpenAlertByCompanyAndDate(ctx context.Context, companyID string, date time.Time) (*CashAlert, error) {
-	a, err := scanCashAlert(r.db.QueryRow(ctx,
-		`SELECT `+cashAlertColumns+` FROM cash_alerts WHERE company_id = $1 AND projected_date = $2 AND is_resolved = false LIMIT 1`,
-		companyID, date))
-	if errors.Is(err, ErrNotFound) {
+func (r *BunRepository) UpdateAlert(ctx context.Context, a *CashAlert) error {
+	_, err := r.db.NewUpdate().Model(a).
+		Set("severity = ?", a.Severity).
+		Set("projected_deficit = ?", a.ProjectedDeficit).
+		Set("description = ?", a.Description).
+		Set("updated_at = now()").
+		Where("id = ?", a.ID).
+		Exec(ctx)
+	return err
+}
+
+// GetOpenAlertByCompanyAndDate returns (nil, nil) — not an error — when
+// there is no open alert for that day, matching the "no row" case the
+// caller (raiseOrUpdateAlert) treats as "create a new one".
+func (r *BunRepository) GetOpenAlertByCompanyAndDate(ctx context.Context, companyID string, date time.Time) (*CashAlert, error) {
+	a := new(CashAlert)
+	err := r.db.NewSelect().Model(a).
+		Where("company_id = ?", companyID).
+		Where("projected_date = ?", date).
+		Where("is_resolved = false").
+		Limit(1).
+		Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -422,79 +406,58 @@ func (r *PostgresRepository) GetOpenAlertByCompanyAndDate(ctx context.Context, c
 	return a, nil
 }
 
-func (r *PostgresRepository) ListAlertsByCompany(ctx context.Context, companyID string, onlyUnresolved bool) ([]CashAlert, error) {
-	query := `SELECT ` + cashAlertColumns + ` FROM cash_alerts WHERE company_id = $1`
+func (r *BunRepository) ListAlertsByCompany(ctx context.Context, companyID string, onlyUnresolved bool) ([]CashAlert, error) {
+	out := []CashAlert{}
+	q := r.db.NewSelect().Model(&out).Where("company_id = ?", companyID)
 	if onlyUnresolved {
-		query += ` AND is_resolved = false`
+		q = q.Where("is_resolved = false")
 	}
-	query += ` ORDER BY projected_date ASC`
-
-	rows, err := r.db.Query(ctx, query, companyID)
-	if err != nil {
+	if err := q.OrderExpr("projected_date ASC").Scan(ctx); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	out := []CashAlert{}
-	for rows.Next() {
-		a, err := scanCashAlert(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *a)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func (r *PostgresRepository) SetAlertResolved(ctx context.Context, companyID, id string, resolved bool) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE cash_alerts SET is_resolved = $1, updated_at = now() WHERE company_id = $2 AND id = $3`,
-		resolved, companyID, id)
+func (r *BunRepository) SetAlertResolved(ctx context.Context, companyID, id string, resolved bool) error {
+	_, err := r.db.NewUpdate().Model((*CashAlert)(nil)).
+		Set("is_resolved = ?", resolved).
+		Set("updated_at = now()").
+		Where("company_id = ?", companyID).
+		Where("id = ?", id).
+		Exec(ctx)
 	return err
 }
 
 // ---- Cash flow projections ----
 
-func (r *PostgresRepository) UpsertProjections(ctx context.Context, companyID string, rows []CashFlowProjection) error {
-	tx, err := r.db.Begin(ctx)
-	if err != nil {
-		return err
+// UpsertProjections used to loop individual upserts inside a manual
+// transaction; Bun's multi-row insert does the same ON CONFLICT upsert for
+// the whole batch in one statement, which is already atomic on its own.
+func (r *BunRepository) UpsertProjections(ctx context.Context, companyID string, rows []CashFlowProjection) error {
+	if len(rows) == 0 {
+		return nil
 	}
-	defer tx.Rollback(ctx)
-
-	for _, p := range rows {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO cash_flow_projections (company_id, projected_date, projected_balance, generated_at)
-			 VALUES ($1, $2, $3, now())
-			 ON CONFLICT (company_id, projected_date)
-			 DO UPDATE SET projected_balance = EXCLUDED.projected_balance, generated_at = now()`,
-			companyID, p.ProjectedDate, p.ProjectedBalance); err != nil {
-			return err
-		}
+	for i := range rows {
+		rows[i].CompanyID = companyID
+		rows[i].GeneratedAt = time.Time{} // let the DB default (now()) fill it
 	}
-
-	return tx.Commit(ctx)
+	_, err := r.db.NewInsert().Model(&rows).
+		On("CONFLICT (company_id, projected_date) DO UPDATE").
+		Set("projected_balance = EXCLUDED.projected_balance").
+		Set("generated_at = now()").
+		Exec(ctx)
+	return err
 }
 
-func (r *PostgresRepository) ListProjectionsByCompany(ctx context.Context, companyID string, days int) ([]CashFlowProjection, error) {
-	rows, err := r.db.Query(ctx,
-		`SELECT id, company_id, projected_date, projected_balance, generated_at
-		 FROM cash_flow_projections
-		 WHERE company_id = $1 AND projected_date <= CURRENT_DATE + $2::int
-		 ORDER BY projected_date ASC`,
-		companyID, days)
+func (r *BunRepository) ListProjectionsByCompany(ctx context.Context, companyID string, days int) ([]CashFlowProjection, error) {
+	out := []CashFlowProjection{}
+	err := r.db.NewSelect().Model(&out).
+		Where("company_id = ?", companyID).
+		Where("projected_date <= CURRENT_DATE + ?::int", days).
+		OrderExpr("projected_date ASC").
+		Scan(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	out := []CashFlowProjection{}
-	for rows.Next() {
-		var p CashFlowProjection
-		if err := rows.Scan(&p.ID, &p.CompanyID, &p.ProjectedDate, &p.ProjectedBalance, &p.GeneratedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
+	return out, nil
 }
