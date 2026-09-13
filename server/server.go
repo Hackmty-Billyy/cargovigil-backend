@@ -12,13 +12,15 @@ import (
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/auth"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/company"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/fuel"
+	"github.com/Hackmty-Billyy/cargovigil-backend/domain/logistics"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/routecost"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/treasury"
 	appmw "github.com/Hackmty-Billyy/cargovigil-backend/middleware"
 )
 
 func New(cfg *config.Config, authService *auth.Service, companyService *company.Service,
-	treasuryService *treasury.Service, routeCostService *routecost.Service, fuelService *fuel.Service) *fiber.App {
+	treasuryService *treasury.Service, routeCostService *routecost.Service, fuelService *fuel.Service,
+	logisticsService *logistics.Service) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName: "Logistics Fintech API v1.0",
 	})
@@ -91,6 +93,13 @@ func New(cfg *config.Config, authService *auth.Service, companyService *company.
 	// differentiated per-route inside RegisterRoutes, like the company group.
 	fuelGroup := app.Group("/fuel", authMiddleware)
 	fuelHandler.RegisterRoutes(fuelGroup, writeGuard, financeGuard)
+
+	// Live radar: the read/orchestration layer the dashboard map talks to. It
+	// creates nothing of its own — trips go through routecost, prices through
+	// fuel — so it reuses the same company-role gate as module 2.
+	logisticsHandler := logistics.NewHandler(logisticsService)
+	logisticsGroup := app.Group("/logistics", authMiddleware, companyRoles)
+	logisticsHandler.RegisterRoutes(logisticsGroup, writeGuard)
 
 	return app
 }

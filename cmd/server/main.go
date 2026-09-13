@@ -10,6 +10,7 @@ import (
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/auth"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/company"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/fuel"
+	"github.com/Hackmty-Billyy/cargovigil-backend/domain/logistics"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/routecost"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/treasury"
 	"github.com/Hackmty-Billyy/cargovigil-backend/jobs"
@@ -71,6 +72,10 @@ func main() {
 	fuelRepo := fuel.NewBunRepository(bunDB)
 	fuelService := fuel.NewService(fuelRepo, fuelRepo, fuelRepo, fuelRepo)
 
+	logisticsRepo := logistics.NewBunRepository(bunDB)
+	logisticsService := logistics.NewService(logisticsRepo, routeCostService, fuelService,
+		routecost.FXRates{USDToMXN: cfg.FXUSDToMXN})
+
 	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
 	defer cancelCleanup()
 	jobs.StartRefreshTokenCleanup(cleanupCtx, refreshRepo, time.Hour)
@@ -78,6 +83,6 @@ func main() {
 	jobs.StartRouteRiskJob(cleanupCtx, companyService, routeCostService, 24*time.Hour)
 	jobs.StartFuelSurchargeRecalcJob(cleanupCtx, companyService, fuelService, 24*time.Hour)
 
-	app := server.New(cfg, authService, companyService, treasuryService, routeCostService, fuelService)
+	app := server.New(cfg, authService, companyService, treasuryService, routeCostService, fuelService, logisticsService)
 	log.Fatal(app.Listen(":" + cfg.Port))
 }
