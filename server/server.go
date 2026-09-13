@@ -20,8 +20,8 @@ func New(cfg *config.Config, authService *auth.Service, companyService *company.
 	})
 
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*",
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
+		AllowOrigins: "https://cargovigil.tech, https://dev.cargovigil.tech, https://api.cargovigil.tech, https://apidev.cargovigil.tech, http://localhost:5173, http://localhost:3000, *",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization, X-Requested-With",
 		AllowMethods: "GET, POST, HEAD, PUT, DELETE, PATCH, OPTIONS",
 	}))
 	app.Use(recover.New())
