@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS cash_alerts;
+DROP TABLE IF EXISTS expenses;
+DROP TABLE IF EXISTS invoices;
+DROP TABLE IF EXISTS bank_accounts;
