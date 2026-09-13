@@ -337,6 +337,23 @@ func (s *Service) ListRiskProfiles(ctx context.Context, companyID string) ([]Rou
 	return s.risk.ListRiskProfilesByCompany(ctx, companyID)
 }
 
+// GetRouteRisk returns the stored profile of one route, or the neutral
+// defaults when the route has no history yet — so callers pricing a trip
+// (domain/logistics' pre-trip projection) never have to special-case a route
+// that was just created.
+func (s *Service) GetRouteRisk(ctx context.Context, companyID, routeID string) (*RouteRiskProfile, error) {
+	profile, err := s.risk.GetRiskProfile(ctx, companyID, routeID)
+	if errors.Is(err, ErrNotFound) {
+		return &RouteRiskProfile{
+			CompanyID:                      companyID,
+			RouteID:                        routeID,
+			HistoricalRiskScore:            DefaultRiskScore,
+			SuggestedContingencyPercentage: DefaultContingencyPercentage,
+		}, nil
+	}
+	return profile, err
+}
+
 // RecalculateRouteRisk scores one route from the last RiskWindowDays days.
 //
 //	score = 1 + delay factor + incident factor, each capped at 1.0
@@ -457,6 +474,28 @@ func reserveDueDate(departure time.Time) time.Time {
 		return tomorrow
 	}
 	return departure
+}
+
+// AllocateContingencyForOpenTrips sizes a cushion for every open trip that
+// never got one. Trips that arrive by import or by the seeder write
+// trips.contingency_budget directly, so they have the number but none of the
+// fund's accounting — this is the catch-up pass. One failing trip does not
+// abort the rest; the count says how many actually landed.
+func (s *Service) AllocateContingencyForOpenTrips(ctx context.Context, companyID string) (int, error) {
+	tripIDs, err := s.funds.ListTripIDsWithoutFund(ctx, companyID)
+	if err != nil {
+		return 0, err
+	}
+
+	allocated := 0
+	for _, tripID := range tripIDs {
+		if _, err := s.AllocateContingency(ctx, companyID, tripID); err != nil {
+			log.Printf("routecost: bulk allocation skipped trip %s: %v", tripID, err)
+			continue
+		}
+		allocated++
+	}
+	return allocated, nil
 }
 
 func (s *Service) ReleaseContingency(ctx context.Context, companyID, tripID string) (*ContingencyFund, error) {

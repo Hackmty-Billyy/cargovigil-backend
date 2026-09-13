@@ -47,6 +47,14 @@ type Friction struct {
 	OpportunityCost float64    `json:"opportunity_cost"`
 	Notes           *string    `json:"notes"`
 	CreatedAt       time.Time  `json:"created_at"`
+
+	// Joined for the listings: a downtime inbox that shows only trip_id is
+	// unreadable, and making the client resolve every uuid against the
+	// catalogue would be one request per row.
+	TripTrackingCode string `json:"trip_tracking_code,omitempty"`
+	TripStatus       string `json:"trip_status,omitempty"`
+	RouteOrigin      string `json:"route_origin,omitempty"`
+	RouteDestination string `json:"route_destination,omitempty"`
 }
 
 // RouteRiskProfile is the rolling score of a route, recalculated from the
@@ -60,6 +68,11 @@ type RouteRiskProfile struct {
 	SuggestedContingencyPercentage float64   `json:"suggested_contingency_percentage"`
 	IncidentCount                  int       `json:"incident_count"`
 	LastCalculatedAt               time.Time `json:"last_calculated_at"`
+
+	// Joined: the score means nothing without knowing which road it scores.
+	RouteOrigin      string   `json:"route_origin,omitempty"`
+	RouteDestination string   `json:"route_destination,omitempty"`
+	RouteDistanceKM  *float64 `json:"route_distance_km,omitempty"`
 }
 
 // ContingencyFund is the liquidity cushion assigned to one trip.
@@ -86,6 +99,12 @@ type ContingencyFund struct {
 	CalculatedAt      time.Time `json:"calculated_at"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+
+	// Joined, same reason as Friction's.
+	TripTrackingCode string `json:"trip_tracking_code,omitempty"`
+	TripStatus       string `json:"trip_status,omitempty"`
+	RouteOrigin      string `json:"route_origin,omitempty"`
+	RouteDestination string `json:"route_destination,omitempty"`
 }
 
 // RemainingAmount is what is still reserved and unspent.

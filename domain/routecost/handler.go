@@ -42,6 +42,7 @@ func (h *Handler) RegisterRoutes(router fiber.Router, writeGuard, financeGuard f
 	router.Post("/risk-profiles/recalculate", writeGuard, h.RecalculateRiskProfiles)
 
 	router.Get("/contingency", h.ListContingencyFunds)
+	router.Post("/contingency/allocate-all", financeGuard, h.AllocateMissingContingency)
 	router.Get("/trips/:id/contingency", h.GetContingency)
 	router.Post("/trips/:id/contingency/allocate", financeGuard, h.AllocateContingency)
 	router.Post("/trips/:id/contingency/release", financeGuard, h.ReleaseContingency)
@@ -322,6 +323,14 @@ func (h *Handler) AllocateContingency(c *fiber.Ctx) error {
 		return handleRouteCostError(c, err)
 	}
 	return c.JSON(fund)
+}
+
+func (h *Handler) AllocateMissingContingency(c *fiber.Ctx) error {
+	allocated, err := h.svc.AllocateContingencyForOpenTrips(c.Context(), companyIDFromCtx(c))
+	if err != nil {
+		return handleRouteCostError(c, err)
+	}
+	return c.JSON(fiber.Map{"allocated": allocated})
 }
 
 func (h *Handler) ReleaseContingency(c *fiber.Ctx) error {

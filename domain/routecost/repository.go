@@ -82,6 +82,7 @@ type ReserveExpense struct {
 type ContingencyFundRepository interface {
 	GetFundByTrip(ctx context.Context, companyID, tripID string) (*ContingencyFund, error)
 	ListFundsByCompany(ctx context.Context, companyID string) ([]ContingencyFund, error)
+	ListTripIDsWithoutFund(ctx context.Context, companyID string) ([]string, error)
 	AllocateFund(ctx context.Context, f *ContingencyFund, reserve ReserveExpense, mirrorBudget float64) (*ContingencyFund, error)
 	ReleaseFund(ctx context.Context, companyID, tripID string) (*ContingencyFund, error)
 }
@@ -317,10 +318,36 @@ func (r *PostgresRepository) GetFrictionByID(ctx context.Context, companyID, id 
 		`SELECT `+frictionColumns+` FROM trip_frictions WHERE company_id = $1 AND id = $2`, companyID, id))
 }
 
+// enrichedFrictionColumns adds the trip and route labels the listings need.
+// Single-row operations keep using frictionColumns: the response to a create
+// or close carries ids the caller already had.
+const enrichedFrictionColumns = `f.id, f.company_id, f.trip_id, f.event_type, f.location_name, f.started_at,
+	f.ended_at, f.duration_hours, f.cost_impact, f.opportunity_cost, f.notes, f.created_at,
+	COALESCE(t.tracking_code, ''), COALESCE(t.status, ''),
+	COALESCE(rt.origin, ''), COALESCE(rt.destination, '')`
+
+const frictionJoins = `FROM trip_frictions f
+	JOIN trips t ON t.id = f.trip_id
+	LEFT JOIN routes rt ON rt.id = t.route_id`
+
+func scanEnrichedFriction(row pgx.Row) (*Friction, error) {
+	f := &Friction{}
+	err := row.Scan(&f.ID, &f.CompanyID, &f.TripID, &f.EventType, &f.LocationName, &f.StartedAt, &f.EndedAt,
+		&f.DurationHours, &f.CostImpact, &f.OpportunityCost, &f.Notes, &f.CreatedAt,
+		&f.TripTrackingCode, &f.TripStatus, &f.RouteOrigin, &f.RouteDestination)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, pgErrorAs(err)
+	}
+	return f, nil
+}
+
 func (r *PostgresRepository) ListFrictionsByTrip(ctx context.Context, companyID, tripID string) ([]Friction, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT `+frictionColumns+` FROM trip_frictions
-		 WHERE company_id = $1 AND trip_id = $2 ORDER BY started_at DESC`, companyID, tripID)
+		`SELECT `+enrichedFrictionColumns+` `+frictionJoins+`
+		 WHERE f.company_id = $1 AND f.trip_id = $2 ORDER BY f.started_at DESC`, companyID, tripID)
 	if err != nil {
 		return nil, pgErrorAs(err)
 	}
@@ -329,9 +356,9 @@ func (r *PostgresRepository) ListFrictionsByTrip(ctx context.Context, companyID,
 
 func (r *PostgresRepository) ListFrictionsByCompany(ctx context.Context, companyID string, onlyOpen bool) ([]Friction, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT `+frictionColumns+` FROM trip_frictions
-		 WHERE company_id = $1 AND ($2 = false OR ended_at IS NULL)
-		 ORDER BY started_at DESC`, companyID, onlyOpen)
+		`SELECT `+enrichedFrictionColumns+` `+frictionJoins+`
+		 WHERE f.company_id = $1 AND ($2 = false OR f.ended_at IS NULL)
+		 ORDER BY f.started_at DESC`, companyID, onlyOpen)
 	if err != nil {
 		return nil, pgErrorAs(err)
 	}
@@ -343,7 +370,7 @@ func collectFrictions(rows pgx.Rows) ([]Friction, error) {
 
 	list := []Friction{}
 	for rows.Next() {
-		f, err := scanFriction(rows)
+		f, err := scanEnrichedFriction(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -470,7 +497,13 @@ func (r *PostgresRepository) GetRiskProfile(ctx context.Context, companyID, rout
 
 func (r *PostgresRepository) ListRiskProfilesByCompany(ctx context.Context, companyID string) ([]RouteRiskProfile, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT `+riskColumns+` FROM route_risk_profiles WHERE company_id = $1 ORDER BY historical_risk_score DESC`, companyID)
+		`SELECT p.id, p.company_id, p.route_id, p.historical_risk_score, p.avg_delay_hours,
+		        p.suggested_contingency_percentage, p.incident_count, p.last_calculated_at,
+		        COALESCE(rt.origin, ''), COALESCE(rt.destination, ''), rt.distance_km
+		   FROM route_risk_profiles p
+		   LEFT JOIN routes rt ON rt.id = p.route_id
+		  WHERE p.company_id = $1
+		  ORDER BY p.historical_risk_score DESC`, companyID)
 	if err != nil {
 		return nil, pgErrorAs(err)
 	}
@@ -478,11 +511,13 @@ func (r *PostgresRepository) ListRiskProfilesByCompany(ctx context.Context, comp
 
 	list := []RouteRiskProfile{}
 	for rows.Next() {
-		p, err := scanRiskProfile(rows)
-		if err != nil {
-			return nil, err
+		p := RouteRiskProfile{}
+		if err := rows.Scan(&p.ID, &p.CompanyID, &p.RouteID, &p.HistoricalRiskScore, &p.AvgDelayHours,
+			&p.SuggestedContingencyPercentage, &p.IncidentCount, &p.LastCalculatedAt,
+			&p.RouteOrigin, &p.RouteDestination, &p.RouteDistanceKM); err != nil {
+			return nil, pgErrorAs(err)
 		}
-		list = append(list, *p)
+		list = append(list, p)
 	}
 	return list, rows.Err()
 }
@@ -560,7 +595,16 @@ func (r *PostgresRepository) GetFundByTrip(ctx context.Context, companyID, tripI
 
 func (r *PostgresRepository) ListFundsByCompany(ctx context.Context, companyID string) ([]ContingencyFund, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT `+fundColumns+` FROM trip_contingency_funds WHERE company_id = $1 ORDER BY calculated_at DESC`, companyID)
+		`SELECT cf.id, cf.company_id, cf.trip_id, cf.route_risk_score, cf.applied_percentage, cf.base_amount,
+		        cf.base_currency, cf.fx_rate, cf.reserve_currency, cf.allocated_amount, cf.consumed_amount,
+		        cf.released_amount, cf.status, cf.reserve_expense_id, cf.calculated_at, cf.created_at, cf.updated_at,
+		        COALESCE(t.tracking_code, ''), COALESCE(t.status, ''),
+		        COALESCE(rt.origin, ''), COALESCE(rt.destination, '')
+		   FROM trip_contingency_funds cf
+		   JOIN trips t ON t.id = cf.trip_id
+		   LEFT JOIN routes rt ON rt.id = t.route_id
+		  WHERE cf.company_id = $1
+		  ORDER BY cf.calculated_at DESC`, companyID)
 	if err != nil {
 		return nil, pgErrorAs(err)
 	}
@@ -568,13 +612,42 @@ func (r *PostgresRepository) ListFundsByCompany(ctx context.Context, companyID s
 
 	list := []ContingencyFund{}
 	for rows.Next() {
-		f, err := scanFund(rows)
-		if err != nil {
-			return nil, err
+		f := ContingencyFund{}
+		if err := rows.Scan(&f.ID, &f.CompanyID, &f.TripID, &f.RouteRiskScore, &f.AppliedPercentage, &f.BaseAmount,
+			&f.BaseCurrency, &f.FXRate, &f.ReserveCurrency, &f.AllocatedAmount, &f.ConsumedAmount,
+			&f.ReleasedAmount, &f.Status, &f.ReserveExpenseID, &f.CalculatedAt, &f.CreatedAt, &f.UpdatedAt,
+			&f.TripTrackingCode, &f.TripStatus, &f.RouteOrigin, &f.RouteDestination); err != nil {
+			return nil, pgErrorAs(err)
 		}
-		list = append(list, *f)
+		list = append(list, f)
 	}
 	return list, rows.Err()
+}
+
+// ListTripIDsWithoutFund finds open trips that never got a cushion — rows
+// imported or seeded straight into the table, which set
+// trips.contingency_budget without going through this module.
+func (r *PostgresRepository) ListTripIDsWithoutFund(ctx context.Context, companyID string) ([]string, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT t.id FROM trips t
+		  WHERE t.company_id = $1
+		    AND t.status IN ('scheduled', 'in_transit', 'delayed')
+		    AND NOT EXISTS (SELECT 1 FROM trip_contingency_funds cf WHERE cf.trip_id = t.id)
+		  ORDER BY t.departure_date ASC`, companyID)
+	if err != nil {
+		return nil, pgErrorAs(err)
+	}
+	defer rows.Close()
+
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // AllocateFund creates or re-sizes the cushion of a trip and keeps its mirror
