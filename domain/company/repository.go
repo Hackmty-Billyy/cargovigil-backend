@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -159,6 +160,13 @@ func (r *PostgresVehicleRepository) Update(ctx context.Context, v *Vehicle) erro
 
 func (r *PostgresVehicleRepository) Delete(ctx context.Context, companyID, id string) error {
 	_, err := r.db.Exec(ctx, `DELETE FROM vehicles WHERE company_id = $1 AND id = $2`, companyID, id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			_, err = r.db.Exec(ctx, `UPDATE vehicles SET is_active = false, updated_at = now() WHERE company_id = $1 AND id = $2`, companyID, id)
+			return err
+		}
+	}
 	return err
 }
 
@@ -222,6 +230,13 @@ func (r *PostgresRouteRepository) Update(ctx context.Context, rt *Route) error {
 
 func (r *PostgresRouteRepository) Delete(ctx context.Context, companyID, id string) error {
 	_, err := r.db.Exec(ctx, `DELETE FROM routes WHERE company_id = $1 AND id = $2`, companyID, id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			_, err = r.db.Exec(ctx, `UPDATE routes SET is_active = false, updated_at = now() WHERE company_id = $1 AND id = $2`, companyID, id)
+			return err
+		}
+	}
 	return err
 }
 
@@ -285,6 +300,13 @@ func (r *PostgresClientRepository) Update(ctx context.Context, cl *Client) error
 
 func (r *PostgresClientRepository) Delete(ctx context.Context, companyID, id string) error {
 	_, err := r.db.Exec(ctx, `DELETE FROM clients WHERE company_id = $1 AND id = $2`, companyID, id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			_, err = r.db.Exec(ctx, `UPDATE clients SET is_active = false, updated_at = now() WHERE company_id = $1 AND id = $2`, companyID, id)
+			return err
+		}
+	}
 	return err
 }
 
@@ -348,5 +370,12 @@ func (r *PostgresContractRepository) Update(ctx context.Context, ct *Contract) e
 
 func (r *PostgresContractRepository) Delete(ctx context.Context, companyID, id string) error {
 	_, err := r.db.Exec(ctx, `DELETE FROM contracts WHERE company_id = $1 AND id = $2`, companyID, id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			_, err = r.db.Exec(ctx, `UPDATE contracts SET is_active = false, updated_at = now() WHERE company_id = $1 AND id = $2`, companyID, id)
+			return err
+		}
+	}
 	return err
 }
