@@ -87,6 +87,10 @@ func (s *Service) GetTrip(ctx context.Context, companyID, id string) (*Trip, err
 	return s.repo.GetTrip(ctx, companyID, id)
 }
 
+func (s *Service) DeleteTrip(ctx context.Context, companyID, id string) error {
+	return s.routeCost.DeleteTrip(ctx, companyID, id)
+}
+
 func (s *Service) ListFuelIndexes(ctx context.Context) ([]fuel.FuelIndex, error) {
 	return s.fuel.ListFuelIndexes(ctx, "", "", 50)
 }

@@ -28,6 +28,7 @@ func (h *Handler) RegisterRoutes(router fiber.Router, writeGuard fiber.Handler) 
 	router.Post("/trips/advance-simulation", h.AdvanceSimulation)
 	router.Post("/trips", writeGuard, h.CreateTrip)
 	router.Get("/trips/:id", h.GetTrip)
+	router.Delete("/trips/:id", writeGuard, h.DeleteTrip)
 	router.Get("/fuel-indexes", h.ListFuelIndexes)
 }
 
@@ -169,4 +170,14 @@ func (h *Handler) AdvanceSimulation(c *fiber.Ctx) error {
 		return handleLogisticsError(c, err)
 	}
 	return c.JSON(result)
+}
+
+func (h *Handler) DeleteTrip(c *fiber.Ctx) error {
+	tripID := c.Params("id")
+	companyID := companyIDFromCtx(c)
+
+	if err := h.svc.DeleteTrip(c.Context(), companyID, tripID); err != nil {
+		return handleLogisticsError(c, err)
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
