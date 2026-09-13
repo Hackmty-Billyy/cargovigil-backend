@@ -13,11 +13,12 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/uptrace/bun"
 
 	"github.com/Hackmty-Billyy/cargovigil-backend/config"
 	"github.com/Hackmty-Billyy/cargovigil-backend/database"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/company"
+	"github.com/Hackmty-Billyy/cargovigil-backend/domain/fuel"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/treasury"
 )
 
@@ -49,12 +50,14 @@ func main() {
 	}
 	defer pool.Close()
 
-	companyRepo := company.NewPostgresCompanyRepository(pool)
-	vehicleRepo := company.NewPostgresVehicleRepository(pool)
-	routeRepo := company.NewPostgresRouteRepository(pool)
-	clientRepo := company.NewPostgresClientRepository(pool)
-	contractRepo := company.NewPostgresContractRepository(pool)
-	treasuryRepo := treasury.NewPostgresRepository(pool)
+	db := database.NewBunDB(pool)
+
+	companyRepo := company.NewBunCompanyRepository(db)
+	vehicleRepo := company.NewBunVehicleRepository(db)
+	routeRepo := company.NewBunRouteRepository(db)
+	clientRepo := company.NewBunClientRepository(db)
+	contractRepo := company.NewBunContractRepository(db)
+	treasuryRepo := treasury.NewBunRepository(db)
 	treasuryService := treasury.NewService(treasuryRepo, treasuryRepo, treasuryRepo, treasuryRepo, treasuryRepo)
 
 	companies, err := companyRepo.ListAll(ctx)
@@ -69,14 +72,14 @@ func main() {
 		fmt.Printf("== Seeding %s (%s) ==\n", comp.Name, comp.ID)
 
 		cat := ensureBaselineCatalog(ctx, comp.ID, vehicleRepo, routeRepo, clientRepo, contractRepo)
-		ensureBankAccounts(ctx, pool, comp.ID)
-		ensureRouteRiskProfiles(ctx, pool, comp.ID, cat.routeIDs)
-		ensureClientPaymentBehavior(ctx, pool, comp.ID, cat.clientIDs)
+		ensureBankAccounts(ctx, db, comp.ID)
+		ensureRouteRiskProfiles(ctx, db, comp.ID, cat.routeIDs)
+		ensureClientPaymentBehavior(ctx, db, comp.ID, cat.clientIDs)
 
-		bankAccountIDs := bankAccountIDsFor(ctx, pool, comp.ID)
+		bankAccountIDs := bankAccountIDsFor(ctx, db, comp.ID)
 
-		seedTrips(ctx, pool, treasuryRepo, comp.ID, cat, bankAccountIDs)
-		seedLiquidityStress(ctx, pool, treasuryRepo, comp.ID)
+		seedTrips(ctx, db, treasuryRepo, comp.ID, cat, bankAccountIDs)
+		seedLiquidityStress(ctx, db, treasuryRepo, comp.ID)
 
 		if err := treasuryService.RecalculateForecast(ctx, comp.ID); err != nil {
 			log.Printf("  forecast recalculation failed: %v", err)
@@ -90,9 +93,9 @@ func main() {
 
 // ---- Catalog baseline ----
 
-func ensureBaselineCatalog(ctx context.Context, companyID string, vehicleRepo *company.PostgresVehicleRepository,
-	routeRepo *company.PostgresRouteRepository, clientRepo *company.PostgresClientRepository,
-	contractRepo *company.PostgresContractRepository) catalog {
+func ensureBaselineCatalog(ctx context.Context, companyID string, vehicleRepo *company.BunVehicleRepository,
+	routeRepo *company.BunRouteRepository, clientRepo *company.BunClientRepository,
+	contractRepo *company.BunContractRepository) catalog {
 
 	suffix := time.Now().UnixNano() % 100000
 
@@ -165,62 +168,62 @@ func ensureBaselineCatalog(ctx context.Context, companyID string, vehicleRepo *c
 	return cat
 }
 
-func ensureBankAccounts(ctx context.Context, pool *pgxpool.Pool, companyID string) {
-	var count int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM bank_accounts WHERE company_id = $1`, companyID).Scan(&count); err != nil {
+func ensureBankAccounts(ctx context.Context, db *bun.DB, companyID string) {
+	count, err := db.NewSelect().Model((*treasury.BankAccount)(nil)).Where("company_id = ?", companyID).Count(ctx)
+	if err != nil {
 		log.Printf("  count bank_accounts failed: %v", err)
 		return
 	}
 	if count > 0 {
 		return
 	}
-	_, err := pool.Exec(ctx,
-		`INSERT INTO bank_accounts (company_id, bank_name, account_number_mask, currency, current_balance, minimum_required_balance)
-		 VALUES
-		 ($1, 'BBVA Bancomer Operaciones', '**** 7731', 'MXN', 900000.00, 250000.00),
-		 ($1, 'Santander Tesorería USD', '**** 5510', 'USD', 40000.00, 10000.00)`,
-		companyID)
-	if err != nil {
+	accounts := []treasury.BankAccount{
+		{CompanyID: companyID, BankName: "BBVA Bancomer Operaciones", AccountNumberMask: "**** 7731", Currency: "MXN", CurrentBalance: 900000.00, MinimumRequiredBalance: 250000.00, IsActive: true},
+		{CompanyID: companyID, BankName: "Santander Tesorería USD", AccountNumberMask: "**** 5510", Currency: "USD", CurrentBalance: 40000.00, MinimumRequiredBalance: 10000.00, IsActive: true},
+	}
+	if _, err := db.NewInsert().Model(&accounts).Exec(ctx); err != nil {
 		log.Printf("  bank_accounts seed failed: %v", err)
 	}
 }
 
-func bankAccountIDsFor(ctx context.Context, pool *pgxpool.Pool, companyID string) []string {
-	rows, err := pool.Query(ctx, `SELECT id FROM bank_accounts WHERE company_id = $1 AND currency = 'MXN'`, companyID)
+func bankAccountIDsFor(ctx context.Context, db *bun.DB, companyID string) []string {
+	var accounts []treasury.BankAccount
+	err := db.NewSelect().Model(&accounts).Column("id").
+		Where("company_id = ?", companyID).
+		Where("currency = ?", "MXN").
+		Scan(ctx)
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
-		}
+	ids := make([]string, len(accounts))
+	for i, a := range accounts {
+		ids[i] = a.ID
 	}
 	return ids
 }
 
-func ensureRouteRiskProfiles(ctx context.Context, pool *pgxpool.Pool, companyID string, routeIDs []string) {
+func ensureRouteRiskProfiles(ctx context.Context, db *bun.DB, companyID string, routeIDs []string) {
 	for _, routeID := range routeIDs {
-		_, err := pool.Exec(ctx,
-			`INSERT INTO route_risk_profiles (company_id, route_id, historical_risk_score, avg_delay_hours, suggested_contingency_percentage, incident_count)
-			 VALUES ($1, $2, $3, $4, $5, $6)
-			 ON CONFLICT (company_id, route_id) DO NOTHING`,
-			companyID, routeID, randFloat(1.0, 1.6), randFloat(1.0, 10.0), randFloat(3.0, 10.0), randInt(0, 15))
+		rrp := &RouteRiskProfile{
+			CompanyID: companyID, RouteID: routeID,
+			HistoricalRiskScore: randFloat(1.0, 1.6), AvgDelayHours: randFloat(1.0, 10.0),
+			SuggestedContingencyPercentage: randFloat(3.0, 10.0), IncidentCount: randInt(0, 15),
+		}
+		_, err := db.NewInsert().Model(rrp).On("CONFLICT (company_id, route_id) DO NOTHING").Exec(ctx)
 		if err != nil {
 			log.Printf("  route_risk_profiles seed failed: %v", err)
 		}
 	}
 }
 
-func ensureClientPaymentBehavior(ctx context.Context, pool *pgxpool.Pool, companyID string, clientIDs []string) {
+func ensureClientPaymentBehavior(ctx context.Context, db *bun.DB, companyID string, clientIDs []string) {
 	for _, clientID := range clientIDs {
-		_, err := pool.Exec(ctx,
-			`INSERT INTO client_payment_behavior (company_id, client_id, average_pod_approval_days, average_payment_delay_days, dispute_rate_percentage)
-			 VALUES ($1, $2, $3, $4, $5)
-			 ON CONFLICT (company_id, client_id) DO NOTHING`,
-			companyID, clientID, randFloat(1.0, 8.0), randFloat(0.0, 6.0), randFloat(0.0, 8.0))
+		cpb := &ClientPaymentBehavior{
+			CompanyID: companyID, ClientID: clientID,
+			AveragePODApprovalDays: randFloat(1.0, 8.0), AveragePaymentDelayDays: randFloat(0.0, 6.0),
+			DisputeRatePercentage: randFloat(0.0, 8.0),
+		}
+		_, err := db.NewInsert().Model(cpb).On("CONFLICT (company_id, client_id) DO NOTHING").Exec(ctx)
 		if err != nil {
 			log.Printf("  client_payment_behavior seed failed: %v", err)
 		}
@@ -229,7 +232,7 @@ func ensureClientPaymentBehavior(ctx context.Context, pool *pgxpool.Pool, compan
 
 // ---- Trips and everything hanging off a trip ----
 
-func seedTrips(ctx context.Context, pool *pgxpool.Pool, treasuryRepo *treasury.PostgresRepository,
+func seedTrips(ctx context.Context, db *bun.DB, treasuryRepo *treasury.BunRepository,
 	companyID string, cat catalog, mxnBankAccountIDs []string) {
 
 	if len(cat.vehicleIDs) == 0 || len(cat.routeIDs) == 0 || len(cat.clientIDs) == 0 {
@@ -247,8 +250,10 @@ func seedTrips(ctx context.Context, pool *pgxpool.Pool, treasuryRepo *treasury.P
 		status := statuses[i%len(statuses)]
 
 		vehicleType := "truck"
-		row := pool.QueryRow(ctx, `SELECT type FROM vehicles WHERE id = $1`, vehicleID)
-		_ = row.Scan(&vehicleType)
+		veh := new(company.Vehicle)
+		if err := db.NewSelect().Model(veh).Column("type").Where("id = ?", vehicleID).Scan(ctx); err == nil {
+			vehicleType = veh.Type
+		}
 
 		departure, estimatedArrival, actualArrival := datesForStatus(status)
 		freight := freightFor(vehicleType)
@@ -261,47 +266,43 @@ func seedTrips(ctx context.Context, pool *pgxpool.Pool, treasuryRepo *treasury.P
 			contractID = &cid
 		}
 
-		var tripID string
-		err := pool.QueryRow(ctx,
-			`INSERT INTO trips (company_id, vehicle_id, route_id, client_id, contract_id, tracking_code, cargo_type,
-			                     cargo_weight_tons, status, departure_date, estimated_arrival_date, actual_arrival_date,
-			                     agreed_freight_price, currency, fuel_surcharge_amount, contingency_budget)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'USD',$14,$15)
-			 RETURNING id`,
-			companyID, vehicleID, routeID, clientID, contractID,
-			fmt.Sprintf("SEED-%d-%03d", runTag, i), randChoice(cargoTypes), weight, status,
-			departure, estimatedArrival, actualArrival, freight, fuelSurcharge, contingency,
-		).Scan(&tripID)
-		if err != nil {
+		trip := &Trip{
+			CompanyID: companyID, VehicleID: vehicleID, RouteID: routeID, ClientID: clientID, ContractID: contractID,
+			TrackingCode: fmt.Sprintf("SEED-%d-%03d", runTag, i), CargoType: randChoice(cargoTypes), CargoWeightTons: weight,
+			Status: status, DepartureDate: departure, EstimatedArrivalDate: estimatedArrival, ActualArrivalDate: actualArrival,
+			AgreedFreightPrice: freight, Currency: "USD", FuelSurchargeAmount: fuelSurcharge, ContingencyBudget: contingency,
+		}
+		if _, err := db.NewInsert().Model(trip).Returning("id").Exec(ctx); err != nil {
 			log.Printf("  trip insert failed: %v", err)
 			continue
 		}
+		tripID := trip.ID
 
 		switch status {
 		case "completed":
-			seedFriction(ctx, pool, companyID, tripID, departure, 0.35)
-			seedFuelLog(ctx, pool, companyID, tripID, vehicleType, departure)
-			pod := seedPOD(ctx, pool, companyID, tripID, clientID, actualArrival, 0.15)
-			invoiceID, total := seedInvoice(ctx, pool, treasuryRepo, companyID, tripID, clientID, departure, freight+fuelSurcharge, pod)
+			seedFriction(ctx, db, companyID, tripID, departure, 0.35)
+			seedFuelLog(ctx, db, companyID, tripID, vehicleType, departure)
+			pod := seedPOD(ctx, db, companyID, tripID, clientID, actualArrival, 0.15)
+			invoiceID, total := seedInvoice(ctx, treasuryRepo, companyID, tripID, clientID, departure, freight+fuelSurcharge, pod)
 			payIfFunds(ctx, treasuryRepo, companyID, invoiceID, total, mxnBankAccountIDs, 0.7)
-			totalExpenses := seedExpenses(ctx, pool, treasuryRepo, companyID, tripID, departure, freight, mxnBankAccountIDs, 0.8)
-			seedProfitability(ctx, pool, companyID, tripID, freight+fuelSurcharge, totalExpenses)
+			totalExpenses := seedExpenses(ctx, treasuryRepo, companyID, tripID, departure, freight, mxnBankAccountIDs, 0.8)
+			seedProfitability(ctx, db, companyID, tripID, freight+fuelSurcharge, totalExpenses)
 
 		case "delayed":
-			seedFriction(ctx, pool, companyID, tripID, departure, 1.0)
-			seedFuelLog(ctx, pool, companyID, tripID, vehicleType, departure)
-			pod := seedPOD(ctx, pool, companyID, tripID, clientID, nil, 0.4)
-			invoiceID, total := seedInvoice(ctx, pool, treasuryRepo, companyID, tripID, clientID, departure, freight+fuelSurcharge, pod)
+			seedFriction(ctx, db, companyID, tripID, departure, 1.0)
+			seedFuelLog(ctx, db, companyID, tripID, vehicleType, departure)
+			pod := seedPOD(ctx, db, companyID, tripID, clientID, nil, 0.4)
+			invoiceID, total := seedInvoice(ctx, treasuryRepo, companyID, tripID, clientID, departure, freight+fuelSurcharge, pod)
 			payIfFunds(ctx, treasuryRepo, companyID, invoiceID, total, mxnBankAccountIDs, 0.2)
-			seedExpenses(ctx, pool, treasuryRepo, companyID, tripID, departure, freight, mxnBankAccountIDs, 0.3)
+			seedExpenses(ctx, treasuryRepo, companyID, tripID, departure, freight, mxnBankAccountIDs, 0.3)
 
 		case "in_transit":
-			seedFuelLog(ctx, pool, companyID, tripID, vehicleType, departure)
-			seedInvoice(ctx, pool, treasuryRepo, companyID, tripID, clientID, departure, freight+fuelSurcharge, false)
-			seedExpenses(ctx, pool, treasuryRepo, companyID, tripID, departure, freight, mxnBankAccountIDs, 0.1)
+			seedFuelLog(ctx, db, companyID, tripID, vehicleType, departure)
+			seedInvoice(ctx, treasuryRepo, companyID, tripID, clientID, departure, freight+fuelSurcharge, false)
+			seedExpenses(ctx, treasuryRepo, companyID, tripID, departure, freight, mxnBankAccountIDs, 0.1)
 
 		case "scheduled":
-			seedInvoice(ctx, pool, treasuryRepo, companyID, tripID, clientID, departure, freight+fuelSurcharge, false)
+			seedInvoice(ctx, treasuryRepo, companyID, tripID, clientID, departure, freight+fuelSurcharge, false)
 
 		case "cancelled":
 			// no financial trail — matches a trip that never actually ran.
@@ -311,24 +312,24 @@ func seedTrips(ctx context.Context, pool *pgxpool.Pool, treasuryRepo *treasury.P
 	fmt.Printf("  %d trips seeded\n", tripsPerCompany)
 }
 
-func seedFriction(ctx context.Context, pool *pgxpool.Pool, companyID, tripID string, departure time.Time, prob float64) {
+func seedFriction(ctx context.Context, db *bun.DB, companyID, tripID string, departure time.Time, prob float64) {
 	if rand.Float64() > prob {
 		return
 	}
 	start := departure.Add(time.Duration(randInt(2, 20)) * time.Hour)
 	duration := randFloat(1.0, 8.0)
 	end := start.Add(time.Duration(duration * float64(time.Hour)))
-	_, err := pool.Exec(ctx,
-		`INSERT INTO trip_frictions (company_id, trip_id, event_type, location_name, started_at, ended_at, duration_hours, cost_impact, notes)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		companyID, tripID, randChoice(frictionEvents), "Punto de control en ruta", start, end, duration,
-		duration*randFloat(20, 60), "Generado por seeder de simulación")
-	if err != nil {
+	tf := &TripFriction{
+		CompanyID: companyID, TripID: tripID, EventType: randChoice(frictionEvents), LocationName: "Punto de control en ruta",
+		StartedAt: start, EndedAt: &end, DurationHours: duration, CostImpact: duration * randFloat(20, 60),
+		Notes: "Generado por seeder de simulación",
+	}
+	if _, err := db.NewInsert().Model(tf).Exec(ctx); err != nil {
 		log.Printf("  trip_frictions insert failed: %v", err)
 	}
 }
 
-func seedFuelLog(ctx context.Context, pool *pgxpool.Pool, companyID, tripID, vehicleType string, departure time.Time) {
+func seedFuelLog(ctx context.Context, db *bun.DB, companyID, tripID, vehicleType string, departure time.Time) {
 	fuelType := fuelTypes[vehicleType]
 	if fuelType == "" {
 		fuelType = "diesel"
@@ -339,18 +340,20 @@ func seedFuelLog(ctx context.Context, pool *pgxpool.Pool, companyID, tripID, veh
 		costPerUnit = randFloat(580, 650)
 		volume = randFloat(20, 45)
 	}
-	_, err := pool.Exec(ctx,
-		`INSERT INTO trip_fuel_logs (company_id, trip_id, fuel_type, volume_purchased, cost_per_unit, total_cost, odometer_or_hours, purchased_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		companyID, tripID, fuelType, volume, costPerUnit, volume*costPerUnit, randFloat(50, 2000), departure.Add(2*time.Hour))
-	if err != nil {
+	odo := randFloat(50, 2000)
+	purchasedAt := departure.Add(2 * time.Hour)
+	l := &fuel.TripFuelLog{
+		CompanyID: companyID, TripID: tripID, FuelType: fuelType, VolumePurchased: volume, CostPerUnit: costPerUnit,
+		TotalCost: volume * costPerUnit, OdometerOrHours: &odo, PurchasedAt: purchasedAt,
+	}
+	if _, err := db.NewInsert().Model(l).Exec(ctx); err != nil {
 		log.Printf("  trip_fuel_logs insert failed: %v", err)
 	}
 }
 
 // seedPOD returns true if the POD ended up under dispute (used to push the
 // invoice's adjusted_due_date out, mirroring the real POD -> treasury link).
-func seedPOD(ctx context.Context, pool *pgxpool.Pool, companyID, tripID, clientID string, actualArrival *time.Time, disputeProb float64) bool {
+func seedPOD(ctx context.Context, db *bun.DB, companyID, tripID, clientID string, actualArrival *time.Time, disputeProb float64) bool {
 	disputed := rand.Float64() < disputeProb
 	status := "approved_by_client"
 	var deliveryDate, signatureDate *time.Time
@@ -371,18 +374,18 @@ func seedPOD(ctx context.Context, pool *pgxpool.Pool, companyID, tripID, clientI
 		signatureDate = nil
 	}
 
-	_, err := pool.Exec(ctx,
-		`INSERT INTO pod_documents (company_id, trip_id, client_id, document_url, status, dispute_reason, delivery_date, signature_date, days_to_sign)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		companyID, tripID, clientID, fmt.Sprintf("https://storage.cargovigil.test/pods/%s.pdf", tripID), status, disputeReason,
-		deliveryDate, signatureDate, daysToSign)
-	if err != nil {
+	pod := &PODDocument{
+		CompanyID: companyID, TripID: tripID, ClientID: clientID,
+		DocumentURL: fmt.Sprintf("https://storage.cargovigil.test/pods/%s.pdf", tripID),
+		Status:      status, DisputeReason: disputeReason, DeliveryDate: deliveryDate, SignatureDate: signatureDate, DaysToSign: daysToSign,
+	}
+	if _, err := db.NewInsert().Model(pod).Exec(ctx); err != nil {
 		log.Printf("  pod_documents insert failed: %v", err)
 	}
 	return disputed
 }
 
-func seedInvoice(ctx context.Context, pool *pgxpool.Pool, treasuryRepo *treasury.PostgresRepository,
+func seedInvoice(ctx context.Context, treasuryRepo *treasury.BunRepository,
 	companyID, tripID, clientID string, departure time.Time, amount float64, podDisputed bool) (string, float64) {
 
 	issueDate := departure.AddDate(0, 0, 1)
@@ -392,10 +395,7 @@ func seedInvoice(ctx context.Context, pool *pgxpool.Pool, treasuryRepo *treasury
 		adjustedDueDate = dueDate.AddDate(0, 0, randInt(8, 15))
 	}
 
-	var invoiceNumber string
-	if err := pool.QueryRow(ctx, `SELECT 'SEED-INV-' || substr(gen_random_uuid()::text, 1, 8)`).Scan(&invoiceNumber); err != nil {
-		invoiceNumber = fmt.Sprintf("SEED-INV-%d", time.Now().UnixNano())
-	}
+	invoiceNumber := fmt.Sprintf("SEED-INV-%s", randomHex(8))
 
 	inv := &treasury.Invoice{
 		CompanyID: companyID, TripID: &tripID, ClientID: clientID, InvoiceNumber: invoiceNumber,
@@ -408,7 +408,7 @@ func seedInvoice(ctx context.Context, pool *pgxpool.Pool, treasuryRepo *treasury
 	return inv.ID, amount
 }
 
-func payIfFunds(ctx context.Context, treasuryRepo *treasury.PostgresRepository, companyID, invoiceID string, amount float64, mxnBankAccountIDs []string, prob float64) {
+func payIfFunds(ctx context.Context, treasuryRepo *treasury.BunRepository, companyID, invoiceID string, amount float64, mxnBankAccountIDs []string, prob float64) {
 	if invoiceID == "" || len(mxnBankAccountIDs) == 0 || rand.Float64() > prob {
 		return
 	}
@@ -418,7 +418,7 @@ func payIfFunds(ctx context.Context, treasuryRepo *treasury.PostgresRepository, 
 	}
 }
 
-func seedExpenses(ctx context.Context, pool *pgxpool.Pool, treasuryRepo *treasury.PostgresRepository,
+func seedExpenses(ctx context.Context, treasuryRepo *treasury.BunRepository,
 	companyID, tripID string, departure time.Time, freight float64, mxnBankAccountIDs []string, payProb float64) float64 {
 
 	count := randInt(1, 3)
@@ -448,7 +448,7 @@ func seedExpenses(ctx context.Context, pool *pgxpool.Pool, treasuryRepo *treasur
 	return total
 }
 
-func seedProfitability(ctx context.Context, pool *pgxpool.Pool, companyID, tripID string, grossRevenue, totalExpenses float64) {
+func seedProfitability(ctx context.Context, db *bun.DB, companyID, tripID string, grossRevenue, totalExpenses float64) {
 	fuelCost := grossRevenue * randFloat(0.05, 0.15)
 	tollPort := grossRevenue * randFloat(0.01, 0.05)
 	driverCost := grossRevenue * randFloat(0.03, 0.08)
@@ -462,11 +462,12 @@ func seedProfitability(ctx context.Context, pool *pgxpool.Pool, companyID, tripI
 	}
 	profitPerKM := netProfit / randFloat(150, 2000)
 
-	_, err := pool.Exec(ctx,
-		`INSERT INTO trip_profitability (company_id, trip_id, gross_revenue, fuel_cost, toll_and_port_cost, driver_cost, friction_cost, maintenance_allocation, total_cost, net_profit, profit_margin_percentage, profit_per_km)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-		 ON CONFLICT (trip_id) DO NOTHING`,
-		companyID, tripID, grossRevenue, fuelCost, tollPort, driverCost, frictionCost, maintenance, totalCost, netProfit, margin, profitPerKM)
+	tp := &TripProfitability{
+		CompanyID: companyID, TripID: tripID, GrossRevenue: grossRevenue, FuelCost: fuelCost, TollAndPortCost: tollPort,
+		DriverCost: driverCost, FrictionCost: frictionCost, MaintenanceAllocation: maintenance, TotalCost: totalCost,
+		NetProfit: netProfit, ProfitMarginPercentage: margin, ProfitPerKM: profitPerKM,
+	}
+	_, err := db.NewInsert().Model(tp).On("CONFLICT (trip_id) DO NOTHING").Exec(ctx)
 	if err != nil {
 		log.Printf("  trip_profitability insert failed: %v", err)
 	}
@@ -476,13 +477,22 @@ func seedProfitability(ctx context.Context, pool *pgxpool.Pool, companyID, tripI
 // company, sized off its actual MXN balance/threshold, so the alert
 // pipeline (cash_alerts) gets genuinely exercised instead of only ever
 // showing the one hand-seeded example alert from migration 000017.
-func seedLiquidityStress(ctx context.Context, pool *pgxpool.Pool, treasuryRepo *treasury.PostgresRepository, companyID string) {
+func seedLiquidityStress(ctx context.Context, db *bun.DB, treasuryRepo *treasury.BunRepository, companyID string) {
+	var accounts []treasury.BankAccount
+	err := db.NewSelect().Model(&accounts).
+		Where("company_id = ?", companyID).
+		Where("currency = ?", "MXN").
+		Where("is_active = true").
+		Scan(ctx)
+	if err != nil {
+		return
+	}
 	var balance, threshold float64
-	err := pool.QueryRow(ctx,
-		`SELECT coalesce(sum(current_balance),0), coalesce(sum(minimum_required_balance),0)
-		 FROM bank_accounts WHERE company_id = $1 AND currency = 'MXN' AND is_active`, companyID).
-		Scan(&balance, &threshold)
-	if err != nil || balance <= threshold {
+	for _, a := range accounts {
+		balance += a.CurrentBalance
+		threshold += a.MinimumRequiredBalance
+	}
+	if balance <= threshold {
 		return
 	}
 
@@ -573,4 +583,13 @@ func randInt(min, max int) int {
 		return min
 	}
 	return min + rand.Intn(max-min+1)
+}
+
+func randomHex(n int) string {
+	const digits = "0123456789abcdef"
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = digits[rand.Intn(len(digits))]
+	}
+	return string(b)
 }
