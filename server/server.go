@@ -11,16 +11,17 @@ import (
 	"github.com/Hackmty-Billyy/cargovigil-backend/config"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/auth"
 	"github.com/Hackmty-Billyy/cargovigil-backend/domain/company"
+	"github.com/Hackmty-Billyy/cargovigil-backend/domain/treasury"
 	appmw "github.com/Hackmty-Billyy/cargovigil-backend/middleware"
 )
 
-func New(cfg *config.Config, authService *auth.Service, companyService *company.Service) *fiber.App {
+func New(cfg *config.Config, authService *auth.Service, companyService *company.Service, treasuryService *treasury.Service) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName: "Logistics Fintech API v1.0",
 	})
 
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "https://cargovigil.tech, https://dev.cargovigil.tech, https://api.cargovigil.tech, https://apidev.cargovigil.tech, http://localhost:5173, http://localhost:3000, *",
+		AllowOrigins: "https://cargovigil.tech, https://dev.cargovigil.tech, https://api.cargovigil.tech, https://apidev.cargovigil.tech, http://localhost:5173, http://localhost:3000",
 		AllowHeaders: "Origin, Content-Type, Accept, Authorization, X-Requested-With",
 		AllowMethods: "GET, POST, HEAD, PUT, DELETE, PATCH, OPTIONS",
 	}))
@@ -52,6 +53,12 @@ func New(cfg *config.Config, authService *auth.Service, companyService *company.
 	// staff (role platform_admin) can onboard a new company.
 	platformGroup := app.Group("/platform", authMiddleware, appmw.RequireRole(auth.RolePlatformAdminID))
 	companyHandler.RegisterPlatformRoutes(platformGroup)
+
+	// operations has no access here at all, not even read — unlike the
+	// company catalog, cash position/liquidity stays finance+admin only.
+	treasuryHandler := treasury.NewHandler(treasuryService)
+	treasuryGroup := app.Group("/treasury", authMiddleware, appmw.RequireRole(auth.RoleAdminID, auth.RoleFinanceID))
+	treasuryHandler.RegisterRoutes(treasuryGroup)
 
 	return app
 }

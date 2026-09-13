@@ -1,0 +1,476 @@
+<title>Esquema CargoVigil</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root{
+    --bg:#f6f5f1;
+    --surface:#ffffff;
+    --ink:#1c2230;
+    --muted:#5b6472;
+    --line:#dde1e6;
+    --accent:#c1622b;
+    --accent-ink:#7a3c17;
+    --accent-soft:#f3e3d6;
+    --mono-tint:#eef0f3;
+    --font-sans:'IBM Plex Sans', system-ui, sans-serif;
+    --font-mono:'IBM Plex Mono', ui-monospace, 'SF Mono', monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#14181f;
+      --surface:#1b212b;
+      --ink:#e7e9ed;
+      --muted:#97a0ad;
+      --line:#2a313d;
+      --accent:#e08a4b;
+      --accent-ink:#ffd9b3;
+      --accent-soft:#3a2a1e;
+      --mono-tint:#232a35;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#14181f;
+    --surface:#1b212b;
+    --ink:#e7e9ed;
+    --muted:#97a0ad;
+    --line:#2a313d;
+    --accent:#e08a4b;
+    --accent-ink:#ffd9b3;
+    --accent-soft:#3a2a1e;
+    --mono-tint:#232a35;
+  }
+
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--font-sans);
+    margin:0;
+    padding:0 24px 64px;
+  }
+  .wrap{ max-width:1180px; margin:0 auto; }
+
+  header{ padding:48px 0 28px; border-bottom:1px solid var(--line); }
+  .eyebrow{
+    font-family:var(--font-mono);
+    font-size:12px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin:0 0 10px;
+  }
+  h1{
+    font-size:clamp(26px,3.4vw,36px);
+    font-weight:700;
+    margin:0 0 12px;
+    text-wrap:balance;
+    letter-spacing:-.01em;
+  }
+  header p{
+    max-width:68ch;
+    color:var(--muted);
+    font-size:15.5px;
+    line-height:1.65;
+    margin:0;
+  }
+
+  h2{
+    font-family:var(--font-mono);
+    font-size:13px;
+    letter-spacing:.07em;
+    text-transform:uppercase;
+    color:var(--muted);
+    font-weight:600;
+    margin:0 0 16px;
+  }
+
+  section{ padding:40px 0; border-bottom:1px solid var(--line); }
+  section:last-of-type{ border-bottom:none; }
+
+  .module-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+    gap:1px;
+    background:var(--line);
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+  }
+  .module-card{
+    background:var(--surface);
+    padding:16px 18px;
+  }
+  .module-card .name{
+    font-weight:600;
+    font-size:14px;
+    margin:0 0 8px;
+  }
+  .module-card .name .badge{
+    display:inline-block;
+    font-family:var(--font-mono);
+    font-size:10.5px;
+    color:var(--accent-ink);
+    background:var(--accent-soft);
+    border-radius:4px;
+    padding:1px 6px;
+    margin-left:8px;
+    letter-spacing:.03em;
+    vertical-align:1px;
+  }
+  .module-card ul{
+    list-style:none;
+    margin:0;
+    padding:0;
+    display:flex;
+    flex-wrap:wrap;
+    gap:6px;
+  }
+  .module-card li{
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--muted);
+    background:var(--mono-tint);
+    border-radius:4px;
+    padding:2px 7px;
+  }
+  .module-card li.new{
+    color:var(--accent-ink);
+    background:var(--accent-soft);
+  }
+
+  .diagram-shell{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:20px;
+    overflow-x:auto;
+  }
+  .diagram-shell .mermaid{
+    min-width:1400px;
+  }
+
+  .legend{
+    display:flex;
+    gap:22px;
+    flex-wrap:wrap;
+    margin-top:16px;
+    font-size:13px;
+    color:var(--muted);
+  }
+  .legend span{ display:inline-flex; align-items:center; gap:7px; }
+  .swatch{
+    width:11px; height:11px; border-radius:3px; display:inline-block;
+    border:1px solid var(--line);
+  }
+  .swatch.new{ background:var(--accent-soft); border-color:var(--accent); }
+  .swatch.existing{ background:var(--mono-tint); }
+
+  .callout{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-left:3px solid var(--accent);
+    border-radius:8px;
+    padding:20px 22px;
+  }
+  .callout ol{ margin:0; padding-left:20px; }
+  .callout li{ margin:0 0 10px; line-height:1.6; font-size:14.5px; }
+  .callout li:last-child{ margin-bottom:0; }
+  .callout code{
+    font-family:var(--font-mono);
+    background:var(--mono-tint);
+    padding:1px 6px;
+    border-radius:4px;
+    font-size:13px;
+  }
+
+  .note{
+    margin-top:18px;
+    font-size:13.5px;
+    color:var(--muted);
+    line-height:1.6;
+    max-width:72ch;
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">CargoVigil &middot; Backend</p>
+    <h1>Esquema completo de base de datos</h1>
+    <p>Todo lo que existe hoy en Postgres — auth, tenancy, catálogo operativo y el esquema de viajes/tesorería/riesgo/combustible/POD/rentabilidad que ya se migró — más lo que agrega el Módulo 1 (marcado <strong>NUEVO</strong>).</p>
+  </header>
+
+  <section>
+    <h2>Índice por módulo</h2>
+    <div class="module-grid">
+      <div class="module-card">
+        <p class="name">Auth</p>
+        <ul><li>roles</li><li>users</li><li>refresh_tokens</li><li>user_recovery_codes</li></ul>
+      </div>
+      <div class="module-card">
+        <p class="name">Tenancy</p>
+        <ul><li>companies</li></ul>
+      </div>
+      <div class="module-card">
+        <p class="name">Catálogo (Módulo 0)</p>
+        <ul><li>vehicles</li><li>routes</li><li>clients</li><li>contracts</li></ul>
+      </div>
+      <div class="module-card">
+        <p class="name">Operación</p>
+        <ul><li>trips</li></ul>
+      </div>
+      <div class="module-card">
+        <p class="name">Tesorería y banca <span class="badge">Módulo 1</span></p>
+        <ul>
+          <li>bank_accounts</li><li>invoices</li><li>expenses</li><li>cash_alerts</li>
+          <li class="new">cash_flow_projections</li>
+        </ul>
+      </div>
+      <div class="module-card">
+        <p class="name">Riesgo y fricciones <span class="badge">Módulo 2</span></p>
+        <ul><li>trip_frictions</li><li>route_risk_profiles</li></ul>
+      </div>
+      <div class="module-card">
+        <p class="name">Combustible <span class="badge">Módulo 3</span></p>
+        <ul><li>fuel_indexes</li><li>trip_fuel_logs</li></ul>
+      </div>
+      <div class="module-card">
+        <p class="name">POD Intelligence <span class="badge">Módulo 4</span></p>
+        <ul><li>pod_documents</li><li>client_payment_behavior</li></ul>
+      </div>
+      <div class="module-card">
+        <p class="name">Rentabilidad <span class="badge">Módulo 5</span></p>
+        <ul><li>trip_profitability</li></ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Diagrama entidad-relación</h2>
+    <div class="diagram-shell">
+      <pre class="mermaid">
+erDiagram
+    roles ||--o{ users : clasifica
+    companies ||--o{ users : emplea
+    users ||--o{ refresh_tokens : autentica
+    users ||--o{ user_recovery_codes : respalda
+
+    companies ||--o{ vehicles : posee
+    companies ||--o{ routes : define
+    companies ||--o{ clients : atiende
+    companies ||--o{ contracts : registra
+    companies ||--o{ trips : opera
+    companies ||--o{ bank_accounts : mantiene
+    companies ||--o{ cash_alerts : recibe
+    companies ||--o{ cash_flow_projections : proyecta
+
+    clients ||--o{ contracts : firma
+    clients ||--o{ trips : solicita
+    vehicles ||--o{ trips : transporta
+    routes ||--o{ trips : recorre
+    contracts |o--o{ trips : ampara
+
+    trips ||--o{ invoices : factura
+    trips ||--o{ expenses : genera
+    trips ||--o{ trip_frictions : sufre
+    trips ||--o{ trip_fuel_logs : consume
+    trips ||--o{ pod_documents : entrega
+    trips ||--o| trip_profitability : liquida
+
+    bank_accounts |o--o{ invoices : cobra_en
+    bank_accounts |o--o{ expenses : paga_desde
+    clients ||--o{ invoices : recibe
+    clients ||--o{ pod_documents : firma
+    clients ||--o{ client_payment_behavior : historial
+    routes ||--o{ route_risk_profiles : perfila
+
+    users {
+        uuid id PK
+        uuid company_id FK
+        varchar email
+        text password_hash
+        smallint role_id FK
+        boolean totp_enabled
+        text totp_secret_enc
+    }
+    refresh_tokens {
+        uuid id PK
+        uuid user_id FK
+        text token_hash
+        uuid replaced_by_id FK
+        timestamptz expires_at
+        timestamptz revoked_at
+    }
+    user_recovery_codes {
+        uuid id PK
+        uuid user_id FK
+        text code_hash
+        timestamptz used_at
+    }
+    roles {
+        smallint id PK
+        varchar name
+    }
+    companies {
+        uuid id PK
+        varchar name
+        boolean is_active
+    }
+    vehicles {
+        uuid id PK
+        uuid company_id FK
+        varchar type
+        varchar identifier
+    }
+    routes {
+        uuid id PK
+        uuid company_id FK
+        varchar origin
+        varchar destination
+        numeric distance_km
+    }
+    clients {
+        uuid id PK
+        uuid company_id FK
+        varchar name
+        varchar tax_id
+    }
+    contracts {
+        uuid id PK
+        uuid company_id FK
+        uuid client_id FK
+        varchar reference
+        date starts_on
+        date ends_on
+    }
+    trips {
+        uuid id PK
+        uuid company_id FK
+        uuid vehicle_id FK
+        uuid route_id FK
+        uuid client_id FK
+        uuid contract_id FK
+        varchar tracking_code
+        varchar status
+        timestamptz departure_date
+        numeric agreed_freight_price
+        numeric contingency_budget
+    }
+    bank_accounts {
+        uuid id PK
+        uuid company_id FK
+        varchar bank_name
+        varchar currency
+        numeric current_balance
+        numeric minimum_required_balance
+    }
+    invoices {
+        uuid id PK
+        uuid company_id FK
+        uuid trip_id FK
+        uuid client_id FK
+        uuid bank_account_id FK "NUEVO"
+        varchar invoice_number
+        date due_date
+        date adjusted_due_date
+        numeric total_amount
+        numeric paid_amount
+        varchar status
+    }
+    expenses {
+        uuid id PK
+        uuid company_id FK
+        uuid trip_id FK
+        uuid bank_account_id FK "NUEVO"
+        varchar category
+        numeric amount
+        date due_date
+        varchar status
+    }
+    cash_alerts {
+        uuid id PK
+        uuid company_id FK
+        date projected_date
+        varchar severity
+        numeric projected_deficit
+        boolean is_resolved
+    }
+    cash_flow_projections {
+        uuid id PK "NUEVO"
+        uuid company_id FK "NUEVO"
+        date projected_date "NUEVO"
+        numeric projected_balance "NUEVO"
+        timestamptz generated_at "NUEVO"
+    }
+    trip_frictions {
+        uuid id PK
+        uuid company_id FK
+        uuid trip_id FK
+        varchar event_type
+        numeric duration_hours
+        numeric cost_impact
+    }
+    route_risk_profiles {
+        uuid id PK
+        uuid company_id FK
+        uuid route_id FK
+        numeric historical_risk_score
+        numeric suggested_contingency_percentage
+    }
+    fuel_indexes {
+        uuid id PK
+        varchar fuel_type
+        varchar region
+        numeric price_per_unit
+        timestamptz recorded_at
+    }
+    trip_fuel_logs {
+        uuid id PK
+        uuid company_id FK
+        uuid trip_id FK
+        varchar fuel_type
+        numeric volume_purchased
+        numeric total_cost
+    }
+    pod_documents {
+        uuid id PK
+        uuid company_id FK
+        uuid trip_id FK
+        uuid client_id FK
+        varchar status
+        int days_to_sign
+    }
+    client_payment_behavior {
+        uuid id PK
+        uuid company_id FK
+        uuid client_id FK
+        numeric average_pod_approval_days
+        numeric dispute_rate_percentage
+    }
+    trip_profitability {
+        uuid id PK
+        uuid company_id FK
+        uuid trip_id FK
+        numeric gross_revenue
+        numeric total_cost
+        numeric net_profit
+        numeric profit_margin_percentage
+    }
+      </pre>
+    </div>
+    <div class="legend">
+      <span><i class="swatch existing"></i> ya migrado (000001&ndash;000017)</span>
+      <span><i class="swatch new"></i> se agrega en Módulo 1 (000018)</span>
+    </div>
+    <p class="note"><code style="font-family:var(--font-mono)">fuel_indexes</code> es la única tabla sin <code style="font-family:var(--font-mono)">company_id</code>: es un catálogo de referencia global (precios de combustible), no dato de una empresa — por eso no tiene flecha de relación en el diagrama, se cruza en la lógica de aplicación por <code style="font-family:var(--font-mono)">fuel_type</code>/región, no por llave foránea.</p>
+  </section>
+
+  <section>
+    <h2>Qué agrega exactamente el Módulo 1</h2>
+    <div class="callout">
+      <ol>
+        <li><code>ALTER TABLE invoices ADD COLUMN bank_account_id UUID REFERENCES bank_accounts(id)</code> — nullable, se llena al registrar el pago.</li>
+        <li><code>ALTER TABLE expenses ADD COLUMN bank_account_id UUID REFERENCES bank_accounts(id)</code> — mismo criterio.</li>
+        <li>Tabla nueva <code>cash_flow_projections</code> (company_id, projected_date, projected_balance) — snapshot diario que llena el batch job de proyección a 30/60 días.</li>
+      </ol>
+    </div>
+  </section>
+</div>
